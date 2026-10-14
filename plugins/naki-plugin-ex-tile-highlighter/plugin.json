@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "naki-plugin-ex-tile-highlighter",
   "name": "牌面變色（naki-plugin-ex）",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "entry": "plugin.js",
   "capabilities": [
     "observe"
@@ -13,6 +13,7 @@
   ],
   "priority": 100,
   "license": "CC0-1.0",
+  "settingsUI": "settings.html",
   "settings": {
     "color": {
       "type": "string",

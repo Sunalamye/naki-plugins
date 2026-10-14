@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<style>
+  :root { color-scheme: light dark; font: 13px -apple-system, sans-serif; }
+  .row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; gap: 12px; }
+  .swatches { display: flex; gap: 8px; }
+  .swatches button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+  .swatches button[aria-pressed="true"] { border-color: CanvasText; }
+  #hand { display: flex; gap: 4px; }
+  #hand span { width: 26px; height: 36px; border-radius: 4px; border: 1px solid GrayText; background: Canvas; transition: background .15s; }
+  #status { color: GrayText; min-height: 1em; }
+</style>
+<div class="row"><span>推薦牌顏色</span><div class="swatches" id="swatches"></div></div>
+<div class="row"><label for="dim">淡化其餘手牌</label><input id="dim" type="checkbox"></div>
+<div class="row"><span>預覽</span><div id="hand"></div></div>
+<p id="status"></p>
+<script>
+  const colors = { green: [0.45, 1, 0.5], red: [1, 0.45, 0.45], blue: [0.45, 0.65, 1] };
+  const css = (c, a = 1) => 'rgba(' + c.slice(0, 3).map(x => Math.round(x * 255)).join(',') + ',' + a + ')';
+  const state = { color: 'green', dimOthers: true };
+  const status = text => { document.getElementById('status').textContent = text; };
+  const save = (key, value) => window.naki.set(key, value).then(() => status('已存：' + key), e => status('失敗：' + e));
+  const render = () => {
+    document.querySelectorAll('#swatches button').forEach(b => b.setAttribute('aria-pressed', b.dataset.color === state.color));
+    dim.checked = state.dimOthers;
+    document.querySelectorAll('#hand span').forEach((tile, i) => {
+      tile.style.background = i === 2 ? css(colors[state.color] || colors.green)
+        : state.dimOthers ? css([0.62, 0.62, 0.68], 0.55) : '';
+    });
+  };
+  Object.keys(colors).forEach(name => {
+    const b = document.createElement('button');
+    b.dataset.color = name; b.title = name; b.style.background = css(colors[name]);
+    b.onclick = () => { state.color = name; render(); save('color', name); };
+    swatches.append(b);
+  });
+  for (let i = 0; i < 6; i++) hand.append(document.createElement('span'));
+  dim.onchange = () => { state.dimOthers = dim.checked; render(); save('dimOthers', dim.checked); };
+  window.naki.get().then(v => { state.color = colors[v.color] ? v.color : 'green'; state.dimOthers = v.dimOthers; render(); }, e => status('讀取失敗：' + e));
+  render();
+</script>
