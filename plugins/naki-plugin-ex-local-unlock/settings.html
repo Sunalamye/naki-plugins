@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<style>
+  :root { color-scheme: light dark; font: 13px -apple-system, sans-serif; }
+  #warn { border: 1px solid #d9534f; border-radius: 6px; padding: 8px 10px; line-height: 1.5; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; gap: 12px; }
+  input[type="text"] { width: 110px; }
+  #rows .row { justify-content: flex-start; margin: 6px 0; }
+  #status { color: GrayText; min-height: 1em; }
+</style>
+<p id="warn">本插件只改你這台裝置上看到的畫面，其他玩家看到的仍是你帳號實際擁有的外觀。改寫遊戲封包可能違反雀魂的服務條款，有被封號的風險。<strong>只在測試帳號使用，不要在主帳號啟用。</strong> 停用本插件後，請重新載入遊戲頁面，畫面才會完全恢復。安裝插件等於信任插件作者：插件與遊戲在同一個環境執行，Naki 無法阻止插件做其他事。</p>
+<div class="row"><label for="ack">我確認只在測試帳號使用</label><input id="ack" type="checkbox"></div>
+<fieldset id="controls" disabled>
+  <div class="row"><label for="enabled">啟用本機外觀覆寫</label><input id="enabled" type="checkbox"></div>
+  <div class="row"><label for="title">對局內稱號 id（0＝不覆寫）</label><input id="title" type="text" inputmode="numeric"></div>
+  <div>對局內裝扮（只改該 slot 已存在的項目）</div>
+  <div id="rows"></div>
+  <button id="add" type="button">新增 slot</button>
+</fieldset>
+<p id="status"></p>
+<script>
+  const MAX = 4294967295;
+  const state = { rows: [] };
+  const $ = id => document.getElementById(id);
+  const status = text => { $('status').textContent = text; };
+  const save = (key, value) => window.naki.set(key, value).then(
+    () => status('已存：' + key + '。重新載入遊戲頁面並重新登入後，下一場對局生效'), e => status('失敗：' + e));
+  const isId = text => /^\d+$/.test(text) && Number(text) <= MAX;
+  const parseViews = text => text ? text.split(',').map(part => {
+    const [slot = '', item = ''] = part.split('=');
+    return { slot: slot.trim(), item: item.trim() };
+  }) : [];
+  const saveViews = () => {
+    const rows = state.rows.filter(r => r.slot !== '' || r.item !== '');
+    const bad = rows.findIndex((r, i) => !isId(r.slot) || !isId(r.item) || Number(r.item) < 1
+      || rows.findIndex(o => Number(o.slot) === Number(r.slot)) !== i);
+    if (bad >= 0) return status('第 ' + (bad + 1) + ' 列無效（slot 不可重複，item id 至少 1），未存');
+    save('views', rows.map(r => Number(r.slot) + '=' + Number(r.item)).join(','));
+  };
+  const renderRows = () => {
+    $('rows').textContent = '';
+    state.rows.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      [['slot', 'slot'], ['item', 'item id']].forEach(([name, hint]) => {
+        const input = document.createElement('input');
+        input.type = 'text'; input.inputMode = 'numeric'; input.placeholder = hint; input.value = r[name];
+        input.onchange = () => { r[name] = input.value.trim(); saveViews(); };
+        row.append(input);
+      });
+      const del = document.createElement('button');
+      del.type = 'button'; del.textContent = '刪除';
+      del.onclick = () => { state.rows.splice(i, 1); renderRows(); saveViews(); };
+      row.append(del);
+      $('rows').append(row);
+    });
+  };
+  const gate = () => { $('controls').disabled = !$('ack').checked; };
+  $('ack').onchange = () => { gate(); save('testAccountAck', $('ack').checked); };
+  $('enabled').onchange = () => save('enabled', $('enabled').checked);
+  $('title').onchange = () => {
+    const text = $('title').value.trim();
+    if (!isId(text)) return status('稱號 id 必須是 0 到 ' + MAX + ' 的整數，未存');
+    save('titleId', Number(text));
+  };
+  $('add').onclick = () => { state.rows.push({ slot: '', item: '' }); renderRows(); };
+  window.naki.get().then(v => {
+    $('ack').checked = v.testAccountAck === true;
+    gate();
+    $('enabled').checked = v.enabled === true;
+    $('title').value = String(v.titleId || 0);
+    state.rows = parseViews(v.views);
+    renderRows();
+  }, e => status('讀取失敗：' + e));
+</script>
