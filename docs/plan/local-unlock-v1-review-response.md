@@ -45,3 +45,18 @@
 ### 審查的 live 觀察清單
 
 已併入設計 §10 的 live 前置條件與 §9 待查查法。三個要點：先錄未改寫基準；大廳與對局連線都記錄，含未解析與非 RPC；只觀察、不點擊會提交的操作。Astra 指出「不點表情」排除不了自動送出路徑，這點維持在待查，不宣稱已排除。
+
+## 復驗
+
+復驗結論：可進受限 live。復驗者自選 12 個變異，V1、V3、V7、V10、V11 存活，見 `naki-plugins/.swfd/logs/unlock-v1/verify-own-mutation.log`。主線派第四輪小修，證據在 `r4-*`。
+
+| 項目 | 處置 | 證據 |
+|---|---|---|
+| V1：鎖死後不拋錯 | 整合測試 D10 案例補「鎖死後開 L3，送守衛請求」，斷言不外送且原因是 `hook_threw` | `local-unlock-naki.cjs` D10 案例；`r4-verify-own-mutation.log` V1 被殺 |
+| V3：已擁有角色沿用舊長度 | 單測：40 個角色，自家皮膚從 3 byte 縮成 1 byte，payload 超過 128，逐 byte 比對 | 單測「owned character whose skin shrinks…」；V3 被殺 |
+| V7：`varintSize` 的 128 邊界 | 單測：等長稱號從 200 改成 128，兩者都是 2 byte | 單測「equal-length title across the 128 boundary…」；V7 被殺 |
+| V10：varint 超過 32 位元照收 | 依第 3 項刻意改變：varint 收到 10 byte，tag 另加上限 | notes Deviation 22；單測「varints up to 10 bytes…」 |
+| V11：登入不清待配對請求 | 補單測 | 單測「a new login drops pending authGame requests」；V11 被殺 |
+| 精確化：結果相同不算改過 | 大廳與對局內都先比對 bytes，相同就不送 `replace`、不設 `touched`。README 改為「改寫且 bytes 確實有變」 | 單測「a rewrite that yields the original bytes…」，含只差最後一 byte 的反例；修前紅（`r4-red-before-fix.log`） |
+| 可用性：int32 負值 | 允許 10 byte varint，11 byte 拒 | 單測「varints up to 10 bytes…」；修前紅 |
+| 重載後持久快取 | notes 補記保證只到重載為止；README 限制段同步 | notes「保證只到頁面重載為止」 |

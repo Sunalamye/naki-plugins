@@ -187,4 +187,7 @@ test('D10 delivery fault: replace returned true but the host locks; later lobby 
   assert.equal(t.c.__nakiLocalUnlock.lobbyLocked, true);
   assert.equal(await t.skin(4), 3, 'login, two fetches, and no skin change');
   assert.equal(t.guardLog().at(-1).outcome, 'local_error');
+  t.c.__nakiPluginsMayModifyOutbound = true;
+  assert.equal(await t.skin(5), 3, 'L3 on after the lock: still not sent');
+  assert.equal(t.guardLog().at(-1).reason, 'hook_threw');
 });

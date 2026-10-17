@@ -261,7 +261,7 @@ test('truncated payloads, wire type mismatch, unknown wire types: no rewrite, no
   const cases = {
     truncated: good.slice(0, good.length - 3),
     badWire: [...good, 0x0b],
-    overlongVarint: [...good, 0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f],
+    overlongVarint: [...good, 0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f],
     truncatedPlayer: [...vi(2 * 8 + 2), 40, ...uv(1, ME)],
     idAsBytes: ld(2, [...ld(1, [ME]), ...uv(3, 300), ...view(2, 1000)]),
   };
@@ -458,6 +458,7 @@ test('duplicated single fields, damaged characters and field 0 leave the whole r
     [ACCOUNT, ld(2, [...account(ME), ...uv(1, ME)])],
     [ACCOUNT, ld(2, [...account(ME), 0x00, 0x01])],
     [ACCOUNT, [...ld(2, account(ME)), 0x07, 0x01]],
+    [ACCOUNT, ld(2, [...account(ME), 0x80, 0x80, 0x80, 0x80, 0x10, 0x00])],
   ];
   for (const [method, payload] of cases) {
     const rig = lobbyReady();
@@ -546,6 +547,56 @@ test('own-player validation does not depend on which field the settings change',
     assert.equal(rig.calls.length, 0, JSON.stringify(settings));
     assert.ok(rig.logs.some(l => l.includes('結構不符或重複')));
   }
+});
+
+// ---- v1 第四輪：復驗補測與精確化 ----
+test('owned character whose skin shrinks from 3 bytes to 1, among 40 characters: every length prefix is recomputed', () => {
+  const chars = Array.from({ length: 40 }, (_, i) => [200001 + i, 400101 + i * 100]);
+  const rig = lobbyReady({ ...V1, characterId: 200005, skinId: 5 });
+  const payload = charInfo({ chars, skins: [400101], main: 200001 });
+  assert.ok(payload.length > 128);
+  rig.lobby(CHARS, payload);
+  const mine = ld(2, [...uv(1, 200005), ...uv(2, 3), ...uv(5, 5)]);
+  const want = [...chars.flatMap(([id, skin]) => id === 200005 ? mine : ch(id, skin)), ...ld(3, vi(400101)), ...uv(5, 3), ...uv(3, 5), ...uv(4, 200005)];
+  assert.deepEqual(rig.calls, [res(CHARS, want)]);
+  assert.ok(ch(200005, 400501).length - mine.length === 2);
+});
+test('equal-length title across the 128 boundary: 2-byte 200 becomes 2-byte 128', () => {
+  const rig = setup({ ...SETTINGS, titleId: 128, views: '' });
+  const players = mkPlayers({ title: 200 });
+  assert.deepEqual(rig.play({ players }).bytes, expected({ players: withMe(players, { title: 128 }) }));
+});
+test('a new login drops pending authGame requests', () => {
+  const rig = setup();
+  rig.login(); rig.request(); rig.login();
+  unchanged(rig.auth(authPayload({ players: mkPlayers() })));
+  assert.equal(rig.calls.length, 0);
+});
+test('a rewrite that yields the original bytes is not submitted and does not mark the page', () => {
+  let rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), ...uv(7, 600002), ...uv(13, SKIN_ID)]));
+  assert.equal(rig.calls.length, 0);
+  assert.equal(rig.win.__nakiLocalUnlock.touched, false);
+  assert.equal(rig.send(SKIN), undefined);
+  rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), ...uv(7, 600002), ...uv(13, SKIN_ID + 16384)]));
+  assert.equal(rig.calls.length, 1, 'a change in the very last byte is still a change');
+  assert.equal(rig.win.__nakiLocalUnlock.touched, true);
+  rig = setup({ ...SETTINGS, views: '' });
+  const players = mkPlayers({ title: 400 });
+  unchanged(rig.play({ players }));
+  assert.equal(rig.calls.length, 0);
+  assert.equal(rig.win.__nakiLocalUnlock.touched, false);
+});
+test('varints up to 10 bytes (negative int32 such as Account.birthday) are accepted; 11 bytes are rejected', () => {
+  const neg = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+  let rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, [...account(ME), 0x78, ...neg]));
+  assert.deepEqual(rig.calls, [res(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), 0x78, ...neg, ...uv(7, 600002), ...uv(13, SKIN_ID)]))]);
+  rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, [...account(ME), 0x78, 0xff, ...neg]));
+  assert.equal(rig.calls.length, 0);
+  assert.equal(rig.logs.length, 1);
 });
 
 // ---- v1：送出守衛 ----

@@ -91,6 +91,30 @@
 | 新交叉測試在 `d24d115` 的插件上 | 紅（1 失敗），在本輪插件上綠 | 本機重跑 |
 | 全葉欄位盤點 | 1342 列：(a) 44、(b) 21、(c) 179、待查 1098 | `r3-inventory.cjs`、`r3-inventory.tsv` |
 
+## 第四輪（復驗後補測與精確化）
+
+主線依復驗結果派工：可進受限 live，先補四項。復驗者的 live 計畫 `docs/plan/local-unlock-v1-live-plan.md` 保留未追蹤、不 commit。
+
+### Deviations（第四輪）
+
+22. **varint 放寬到 10 byte**：`Account.birthday` 等 int32 負值是 10 byte varint，原本整則拒改。現在照 protobuf 規範收 10 byte，超過才拒。超過 2^32−1 的值照收但不會等於任何設定的 id；tag 另加上限 2^32−1，長度另有界線檢查。復驗者的 V10（varint 超過 32 位元照收）因此不再是缺陷，其目標字串已不存在，跑起來顯示 MISSING。
+23. **結果與原 bytes 相同時不送 `replace`、不設 `touched`**：宿主的污染條件是 bytes 有變，插件的旗標條件跟著對齊，避免「插件 touched、宿主未污染、停用後守衛請求外送」的不一致。大廳與對局內兩條路徑都比對。
+24. **補一條復驗未要求的測試**：重新登入會清空待配對的 `authGame` 請求（復驗變異 V11 存活）。
+
+### 保證只到頁面重載為止
+
+重載後若遊戲從持久快取帶出改寫過的 id，例如把上次的主角色或皮膚存在本機，宿主與插件都擋不住。宿主污染與插件旗標都隨頁面重載清空。設計 §10 第 4 項列為未驗證的 live 項（復驗 D3b）。
+
+### 驗收（第四輪）
+
+| 項目 | 結果 | 證據 |
+|---|---|---|
+| 新測試先紅 | 在 `2f0b500` 的插件上，「結果相同不送」與「10 byte varint」兩條紅 | `r4-red-before-fix.log` |
+| 復驗存活的變異 | V1、V3、V7、V11 改為被殺。V1 由整合測試抓到：D10 鎖死後開 L3，守衛請求仍是 `hook_threw`。V3 由單測抓到：40 個角色、自家皮膚 3 byte 縮成 1 byte、payload 超過 128。V7 由單測抓到：等長稱號 200 改 128 | `r4-verify-own-mutation.log` |
+| `NAKI_ROOT=<Naki 577caf9> node --test tests/*.cjs` | 71／71（local-unlock 49、local-unlock-naki 9、name-hider 7、settings-pages 6）；不設 `NAKI_ROOT` 時 62 通過、9 略過 | `r4-plugin-tests.log` |
+| Naki `plugin-regression.cjs` | 38／38 | `r4-plugin-regression.log` |
+| 變異 48 個（第三輪 38 個，加 V1、V3、V7、V11 與本輪 6 個） | 全部被殺；初跑「tag 上限移除」與「`same()` 忽略最後一 byte」存活，補單測後被殺 | `r4-mutation.log`、`r4-mutate.cjs` |
+
 ## 未驗證
 
 - **I2 尚未驗收**：19 個方法的守衛保證不能替代完整驗收；(b) 21 列與待查 1098 列的外送可達性都還沒有證據（Astra 第三輪建議補記）。
@@ -98,3 +122,4 @@
 - Swift 端 manifest 驗證未實際執行，只讀 `PluginManifest.validate` 的規則比對（`reshapeReceive` 與 `rewriteReceive` 同宣告、`sendGuard` 非空且全為 `.lq.Lobby.*` 並在 `methods`）。
 - 舊版 Naki（2.19.0）實際載入本 manifest 的行為：推測忽略 `sendGuard` 與未知 capability 後照常載入，插件判定不支援而不改寫；未在 App 內驗證。
 - `ResCharacterInfo`、`Account` 欄位號未用 live 封包核對。
+- 重載後持久快取：保證只到頁面重載為止，重載後是否殘留改寫過的 id 未驗證。

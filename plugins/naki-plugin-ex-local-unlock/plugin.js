@@ -17,12 +17,13 @@
   var page = window.__nakiLocalUnlock || (window.__nakiLocalUnlock = { touched: false, lobbyLocked: false });
   var selfId = 0, alive = true, warned = false, authReqs = new Map();
 
+  // varint 最長 10 byte（int32／int64 負值）。超過 2^32−1 的值不會等於任何設定的 id；tag 與長度另有界線檢查。
   function readVarint(b, i, end) {
     var n = 0, mul = 1;
-    for (var k = 0; k < 5 && i < end; k++) {
+    for (var k = 0; k < 10 && i < end; k++) {
       var x = b[i++];
       n += (x & 0x7f) * mul;
-      if (!(x & 0x80)) return n > MAX ? null : [n, i];
+      if (!(x & 0x80)) return [n, i];
       mul *= 128;
     }
     return null;
@@ -42,7 +43,7 @@
     var i = from;
     while (i < to) {
       var start = i, tag = readVarint(b, i, to);
-      if (!tag || tag[0] < 8) return false;
+      if (!tag || tag[0] < 8 || tag[0] > MAX) return false;
       var field = Math.floor(tag[0] / 8), wire = tag[0] & 7, end, v = null;
       i = tag[1];
       if (wire === 0) {
@@ -181,6 +182,12 @@
     spans.forEach(function (s) { edits.push({ from: s.from, value: value }); });
   }
 
+  function same(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
   function applyEdits(b, edits) {
     var out = b.slice();
     edits.forEach(function (e) { out.set(varint(e.value), e.from); });
@@ -201,8 +208,9 @@
     if (!title || !items) return log('自家玩家的稱號或裝扮結構不符或重複，不改寫');
     if (cfg.titleId) planEdits('稱號', title, cfg.titleId, edits, log);
     Object.keys(cfg.views).forEach(function (slot) { planEdits('裝扮 slot ' + slot, items[slot] || [], cfg.views[slot], edits, log); });
-    if (!edits.length) return;
-    if (!ctx.replace(applyEdits(b, edits))) return log('replace 被拒，不改寫');
+    var next = applyEdits(b, edits);
+    if (!edits.length || same(next, b)) return;
+    if (!ctx.replace(next)) return log('replace 被拒，不改寫');
     page.touched = true;
     log('已改寫 ' + edits.length + ' 項');
   }
@@ -254,7 +262,10 @@
     var bodies = collect(b, 3, b.length, 2, 2);
     var body = bodies && bodies.length === 1 && rebuild(b.subarray(3), function (f) { if (f === 2) return bytesField(2, payload); });
     if (!body) return ctx.log('envelope 結構不符，不改寫');
-    if (!ctx.replace(Uint8Array.from(Array.prototype.slice.call(b, 0, 3).concat(body)))) {
+    // 結果與原 bytes 相同時不送：宿主不會污染，插件也不能標記已改寫，兩邊才一致。
+    var next = Uint8Array.from(Array.prototype.slice.call(b, 0, 3).concat(body));
+    if (same(next, b)) return;
+    if (!ctx.replace(next)) {
       page.lobbyLocked = true;
       return ctx.log('變長 replace 被拒，本頁面不再改大廳（重新載入頁面才恢復）');
     }
