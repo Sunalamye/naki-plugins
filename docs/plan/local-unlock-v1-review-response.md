@@ -67,3 +67,10 @@
 - **先二輪 live 找觸發點，再決定要不要改設計**：第一輪零改寫的原因是登入走 `fetchInfo.character_info` 與登入回應 `account`，而非插件壞掉。唯讀點開個人資料／宿舍頁就能確認 `fetchCharacterInfo` 由誰觸發，比直接改走 `fetchInfo`（變長改寫新路徑、要重審）便宜一個量級；若仍不觸發再開 v1.1。
 - **候選改法已查**：`fetchInfo` 不在宿主變長禁改名單；`oauth2Login` 回應在名單內只能等長改寫，零稱號帳號的 title 一個 byte 改不了，頭像 id 等長或可。
 - **plist 殘留四鍵由主線清**：用檔案路徑形式 `defaults delete`，不用 `defaults write`。
+
+## 主線裁決（2026-10-17 第二輪 live 後）：開 v1.1
+
+- 事實：`fetchCharacterInfo` 在 4 次登入、10 次重連與所有可開頁面都沒出現；`fetchAccountInfo` 只在對局後 bot_sync 重連出現一次。v1 在一般登入幾乎不作用。
+- 裁決：改走 `fetchInfo.character_info`（變長改寫，宿主允許）＋登入回應 `account.avatar_id`（等長改寫；`oauth2Login` 在變長禁改名單）。零稱號帳號的 title 一 byte 不改，維持「不符則整則不改」。
+- 取捨：保留 v1 只改兩個方法等於保留一個幾乎不觸發的插件；改走 `fetchInfo` 讓宿舍、皮膚清單與大廳一致（第二輪見大廳與宿舍矛盾），代價是觸碰登入流程的回應，需 Astra 重審與再一輪 live。
+- 守衛名單擴充仍不動：兩輪 live 守衛名單外零命中，無證據支持擴充。
