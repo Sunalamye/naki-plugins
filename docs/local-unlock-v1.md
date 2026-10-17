@@ -38,7 +38,7 @@
 - 欄位順序改變、repeated 混用 packed 與非 packed，都是 proto3 合法形態（契約 §4 三種變形）。
 - envelope 的 header（type、msgId）與 field 1 原樣保留；Naki 會再檢查 type、msgId、method 不變與欄位界內。
 
-提交 `replace` 前完整驗證，任一不符整則不改並記一行 log：結構損壞（含 field 0）、wire type 不符、帶 `error`、單值欄位重複（`main_character_id`、每個 `Character` 的 `charid` 必須恰一筆與 `skin`、`Account` 的 `account_id` 必須恰一筆與 `title`、`avatar_id`、對局內的 `title` 與 `ViewSlot` 的 `slot`、`item_id`）。清單內任何一個 `Character` 損壞，即使不是目標角色，也整則不改。
+提交 `replace` 前完整驗證，任一不符整則不改並記一行 log：結構損壞（含 field 0）、wire type 不符、帶 `error`、單值欄位重複（`main_character_id`、每個 `Character` 的 `charid` 必須恰一筆與 `skin`、`Account` 的 `account_id` 必須恰一筆與 `title`、`avatar_id`、對局內的 `title` 與 `ViewSlot` 的 `slot`、`item_id`）。清單內任何一個 `Character` 損壞，即使不是目標角色，也整則不改。驗證在規劃改寫之前做完，與設定要改哪一項無關：例如只改裝扮時，自家稱號重複仍整則不改。
 
 ## 4. 身分
 
@@ -57,7 +57,7 @@
 
 宿主沒有「插件主動污染」的 API，所以第一次大廳改寫本身就是污染的觸發點；改寫被拒（`replace` 回 `false`）時宿主不污染、插件也不設旗標，畫面沒有變。
 
-**未守衛的外送入口（§9）**：19 個守衛方法之外，仍有請求可能帶外觀 id 或自由文字。宿主擴充守衛名單前，這些入口不在保證內；live 只觀察、不點擊。
+**未守衛的外送入口（§9）**：19 個守衛方法之外的請求都沒有證明，I2 尚未驗收。宿主依 live 證據擴充守衛名單前，這些入口不在保證內；live 只觀察、不點擊。
 
 ## 6. 禮貌降級
 
@@ -75,45 +75,52 @@
 
 ## 9. 外送入口盤點
 
-來源：Naki repo `docs/protocol/liqi.json`（2026-10-17 重抽）的 Lobby、FastTest、Route 全部 RPC 請求，遞迴展開巢狀訊息，篩出欄位名或方法名帶外觀字樣（character、skin、title、avatar、view、emo、loading、item、frame 等），以及 string／bytes 自由文字欄位。腳本與原始輸出：`naki-plugins/.swfd/logs/unlock-v1/r2-inventory.cjs`、`r2-inventory.txt`（117 行）。Route 無命中。
+來源：Naki repo `docs/protocol/liqi.json`（2026-10-17 重抽）的 Lobby、FastTest、Route 全部 443 個 RPC 請求。每個請求遞迴展開巢狀訊息到**全部葉欄位**，不再用關鍵字篩選，逐一分類。腳本與完整輸出（附錄）：`naki-plugins/.swfd/logs/unlock-v1/r3-inventory.cjs`、`r3-inventory.tsv`（1342 列，欄位依序為分類、方法、欄位路徑、型別）。只涵蓋 RPC 請求；非 RPC 的送出不在 schema 內，靠 live 觀察。
 
-**(a) 已在 19 個守衛內**：`changeAvatar`、`useTitle`、`setRandomCharacter`、`updateCharacterSort`、`changeMainCharacter`、`changeCharacterSkin`、`changeCharacterView`、`setHiddenCharacter`、`sendGiftToCharacter`、`changeCommonView`、`saveCommonViews`、`useCommonView`、`upgradeCharacter`、`addFinishedEnding`、`receiveEndingReward`、`receiveCharacterRewards`、`setLoadingImage`、`mmoActivitySetCharacter`、`mmoActivitySetTeamMember`。
-
-**(b) 不在守衛內，遊戲可能帶入補進的 id**（宿主擴充前不保證）：
-
-| 入口 | 欄位 | 可能帶入的途徑 | 宿主可守衛 |
+| 分類 | 定義 | 葉欄位 | 方法 |
 |---|---|---|---|
-| `.lq.Lobby.sayChatMessage` | `content`（string） | 大廳聊天若有依主角色產生的表情或貼圖 | 可（回應 `ResCommon`，field 1 為 Error） |
-| `.lq.Lobby.sendClientMessage` | `type`、`content`（string） | 好友訊息、邀請內容可能帶角色或表情 | 可（`ResCommon`） |
-| `.lq.Lobby.clientMessage` | `message`（string） | 客戶端回報字串，內容未知 | 可（`ResCommon`） |
-| `.lq.Lobby.logReport` | `emoji[].id`、`count` | 表情使用統計，可能依主角色的表情集合產生 | 可（`ResCommon`） |
-| `.lq.Lobby.majClubActivityStartDay`、`majClubActivitySaveRoomData` | `character_room_data[].character_id` | 活動角色候選可能取自角色清單 | 可 |
+| (a) | 方法在 19 個守衛內 | 44 | 19 |
+| (b) | 不在守衛內、優先 live 觀察的候選 | 21 | 16 |
+| (c) | schema 層可證明帶不了 id：空請求 79 個、bool 欄位 100 個 | 179 | — |
+| 待查 | schema 證明不了賦值來源 | 1098 | 339（Lobby 331、FastTest 5、Route 3） |
+
+**I2 尚未驗收**：(b) 與待查合計 1119 個葉欄位沒有證明。在 live 證據或離線追值完成前，不宣稱這些入口不會帶入補進的 id；README 的保證範圍不能替代 I2 驗收。
+
+**(a)**：`changeAvatar`、`useTitle`、`setRandomCharacter`、`updateCharacterSort`、`changeMainCharacter`、`changeCharacterSkin`、`changeCharacterView`、`setHiddenCharacter`、`sendGiftToCharacter`、`changeCommonView`、`saveCommonViews`、`useCommonView`、`upgradeCharacter`、`addFinishedEnding`、`receiveEndingReward`、`receiveCharacterRewards`、`setLoadingImage`、`mmoActivitySetCharacter`、`mmoActivitySetTeamMember`。
+
+**(b)**：
+
+| 入口 | 葉欄位 | 可能帶入的途徑 | 宿主可守衛 |
+|---|---|---|---|
+| `.lq.Lobby.sayChatMessage` | `content` | 大廳聊天若有依主角色產生的表情或貼圖 | 可（`ResCommon`，field 1 為 Error） |
+| `.lq.Lobby.sendClientMessage` | `type`、`content` | 好友訊息、邀請內容可能帶角色或表情 | 可 |
+| `.lq.Lobby.clientMessage` | `message` | 客戶端回報字串，內容未知 | 可 |
+| `.lq.Lobby.logReport` | `emoji.id`、`emoji.count` | 表情使用統計，可能依主角色的表情集合產生 | 可 |
+| `.lq.Lobby.majClubActivityStartDay`、`majClubActivitySaveRoomData` | `character_room_data.character_id` | 活動角色候選可能取自角色清單 | 可 |
 | `.lq.Lobby.majClubActivityUpgradeCharacterPower`、`majClubActivityUpgradeCharacterTag` | `character_id` | 同上 | 可 |
-| `.lq.Lobby.majClubActivityFinishDay` | `customer_list[].emo` | 推測是活動 NPC 情緒，不是外觀 id；未證明 | 可 |
-| `.lq.Lobby.mmoActivityDebugSetTeamCandidate` | `friend_list`、`random_friends`、`npc_list` 的 `character_id` | 推測是除錯入口，正常 UI 不送；未證明 | 可 |
-| `.lq.Lobby.createRoom`、`createCustomizedContest`、`updateManagerCustomizedContest` | `extendinfo`（string） | 規則擴充字串，內容未知 | 可 |
-| `.lq.FastTest.broadcastInGame` | `content`（string） | 對局內表情；對局角色來自 `authGame`，本插件不改角色，但未 live 確認面板來源 | **不可**：守衛只作用在大廳連線，`.lq.FastTest.*` 一律繞過 |
-| `.lq.FastTest.inputGameGMCommand` | `json_data`（string） | 推測 GM 指令，正常客戶端不送；未證明 | **不可**（同上） |
+| `.lq.Lobby.majClubActivityFinishDay` | `customer_list.emo` | 推測是活動 NPC 情緒；未證明 | 可 |
+| `.lq.Lobby.mmoActivityDebugSetTeamCandidate` | 三組清單的 `character_id` | 推測是除錯入口；未證明 | 可 |
+| `.lq.Lobby.createRoom` | `mode.extendinfo`、`pre_rule` | 規則字串，內容未知 | 可 |
+| `.lq.Lobby.createCustomizedContest`、`updateManagerCustomizedContest` | `game_rule_setting.extendinfo` | 同上 | 可 |
+| `.lq.Lobby.gameMasterCommand` | `command` | GM 指令字串，與對局 GM 入口同標準；推測正常客戶端不送 | 可 |
+| `.lq.FastTest.broadcastInGame` | `content` | 對局內表情；本插件不改 `authGame` 角色，但面板可能用大廳共享的角色模型（未證明） | **不可**：守衛只在大廳連線 |
+| `.lq.FastTest.inputGameGMCommand` | `json_data` | 推測 GM 指令；未證明 | **不可** |
 
-**(c) 證明不會帶入補進的 id**：
+**(c)**：只收 schema 本身能證明的兩種。其一是空請求（例如 `ReqCommon`），沒有欄位可帶值。其二是 bool 欄位，只有真假兩值。其餘以語意或「id 來源的回應本插件不改」推論的排除，第二輪曾列為 (c)，本輪全部移到待查。`emoji_switch`、`disable_random_char` 這類開關是 `uint32`，schema 不限值域，也在待查。
 
-| 入口 | 理由 |
-|---|---|
-| `useBagItem`、`openManualItem`、`openRandomRewardItem`、`openAllRewardItem`、`openPreChestItem`、`composeShard`、`sellItem`、`sendActivityGiftToFriend`、`modifyNickname.use_item_id` | id 來自背包回應；本插件只改 `fetchCharacterInfo`、`fetchAccountInfo`、`authGame`，不改背包。角色皮膚存在 `ResCharacterInfo.skins`，不在背包 |
-| `islandActivityBuy`、`islandActivitySell`、`islandActivityTidyBag`、`marathonActivityFinishRace`、`amuletActivitySelectBookEffect` | id 來自各活動自己的回應，本插件不改 |
-| `createRoom`、`createCustomizedContest`、`updateManagerCustomizedContest` 的 `emoji_switch`；`setFriendRoomRandomBotChar.disable_random_char` | 開關旗標，不是 id |
-| `modifySignature.signature`、`userComplain.content`、`leaveComment.content` | 使用者手打的文字 |
-| `verificationIAPOrder`、`solveGooglePlayOrder` | 付款收據與簽章 |
-| 方法名命中但請求不帶 id 的查詢（`fetchCharacterInfo`、`fetchTitleList`、`fetchCommonView` 等 `ReqCommon`）與 `removeFriend`、`useGiftCode` 等 | 請求欄位沒有外觀 id |
+**待查**：包含背包與道具（例如 `openManualItem.item_id`、`select_id`）、活動、建房其餘欄位、簽名與留言文字、付款資料，以及其他所有不屬於 (a)(b)(c) 的葉欄位。查法二選一：
 
-(b) 類的宿主擴充清單在 notes 的「待宿主」段。
+1. **live 觀察**：未改寫基準與改寫後各錄一次送出，只觀察、不點擊會提交的操作，比對欄位值是否落在補入集合（設計 §10）。沒有觀察到請求，只能記「本操作未觀察到」，不等於排除。
+2. **離線追值**：從遊戲客戶端程式追該欄位的賦值來源，證明不讀 `fetchCharacterInfo`、`fetchAccountInfo` 或共享的角色、表情模型。
+
+(b) 與待查的宿主守衛擴充，依 live 證據裁定（notes「待宿主」）。
 
 ## 10. 驗收
 
-- node 單測（假 ctx）：變長 replace 被呼叫且 bytes 正確、非自家不改、無 Phase 4 時停用、守衛方法在改寫後拋錯、replace 被拒後停改大廳、重複欄位與損壞角色整則不改、error 優先、(socketId, msgId) 配對、未污染不改對局內、頁面鎖跨熱重載。
+- node 單測（假 ctx）：變長 replace 被呼叫且 bytes 正確、非自家不改、無 Phase 4 時停用、守衛方法在改寫後拋錯、replace 被拒後停改大廳、重複欄位與損壞角色整則不改、error 優先、(socketId, msgId) 配對、未污染不改對局內、頁面鎖跨熱重載、對局內驗證不隨設定分支。
 - 跨 repo（`NAKI_ROOT` 指向 Naki repo 時才跑）：載入 Naki 實際的 `naki-core.js`、`naki-websocket.js`、`naki-plugins.js`。涵蓋變長交付、守衛拒送與本地錯誤、L3 開著、舊 grant、只有對局內設定時不改、熱停用與再啟用、自動移除、錯序配對、D10 交付故障。
 - live（未做，等 Naki 2.20.0）前置條件：
   1. 只觀察、不點擊：看大廳主角色、個人資料頭像與稱號，以及補入角色的顯示、角色詳情與面板開關（表態 2，不猜填初始值）。
   2. 只開聊天與表情面板、不點表情：確認不列出未擁有角色的表情；若列出且沒有可靠攔截，角色功能不得放行（表態 5）。
-  3. 以只觀察的插件記錄一整段大廳操作的全部送出 method，與 §9 比對；(b) 類出現即記錄內容形狀，不點擊。
+  3. 大廳與對局連線都記錄全部送出，含未解析與非 RPC 的；先錄未改寫基準，再錄改寫後，逐欄比對 §9 (b) 與待查欄位的值是否落在補入集合，不點擊會提交的操作。
   4. 重載頁面後確認遊戲不再顯示改寫資料（快取窗口，Astra 第 7 條，目前沒有證據）。

@@ -1,5 +1,7 @@
 # 本機解鎖 v1：審查回應
 
+## 第一輪
+
 審查原文：Naki repo `.swfd/logs/unlock-v1-review/astra-review1.md`（第一輪，對象 `d426f7f`）。裁決：主線，1【擋】6【應修】全採納。證據在 `naki-plugins/.swfd/logs/unlock-v1/r2-*`；測試名稱指 `tests/local-unlock.cjs`（單測）與 `tests/local-unlock-naki.cjs`（Naki 實際 runtime）。
 
 ## 五個未決問題
@@ -28,3 +30,18 @@
 
 - 重載後遊戲是否從快取恢復改寫資料：列為 live 前置條件 4，目前沒有證據。
 - (b) 類入口的實際守衛要等宿主擴充；`broadcastInGame` 在現行守衛設計下不可守衛。
+
+## 第二輪
+
+審查原文：Naki repo `.swfd/logs/unlock-v1-review/astra-review2.md`（對象 `d24d115`）。結果：0【擋】3【應修】1【建議】，主線裁決全採納。第一輪第 2、4、5、6 條判已修；第 1、3、7 條判部分。第 7 條剩頁面重載後的快取，只能 live。證據在 `naki-plugins/.swfd/logs/unlock-v1/r3-*`。
+
+| 條 | 類別 | 處置 | 證據 |
+|---|---|---|---|
+| 1 對局內驗證隨設定分支 | 應修，採納 | 自家玩家的 `title` 單值與全部 `ViewSlot`（結構含巢狀 field 0、`slot`、`item_id` 單值）在規劃改寫前驗完，與 `cfg.titleId`、`views` 無關 | 單測「own-player validation does not depend on which field the settings change」，四個交叉案例：只改 views 時 title 重複；只改 title 時 `item_id` 重複、巢狀 field 0、`slot` 重複。在 `d24d115` 的插件上紅，本輪綠。變異「r3 …」三條被殺 |
+| 2 盤點仍是關鍵字候選集 | 應修，採納 | 改為全部 443 個 RPC 請求的全部葉欄位，1342 列，逐列分 (a)(b)(c) 或待查。`gameMasterCommand.command`、`createRoom.pre_rule` 進 (b)，`openManualItem.select_id` 在待查。設計 §9 放摘要表，完整檔是附錄 | `r3-inventory.cjs`、`r3-inventory.tsv` |
+| 3 (c) 把來源推論當證明 | 應修，採納 | (c) 只留空請求 79 個與 bool 欄位 100 個；其餘推論全部移到待查，寫明兩種查法（live 觀察、離線追值）。設計、README、notes 都寫明 I2 尚未驗收，README 的較窄保證不能替代 | 設計 §5、§9；插件 README「未守衛的入口，I2 尚未驗收」 |
+| 4 歷史 Deviations 與目前裁決 | 建議，採納 | notes 第 7 項改為現行旗標 `window.__nakiLocalUnlock.touched`，並註明第一輪名稱已取代。「待宿主」改寫為依 live 證據裁定的候選清單，引用宿主 ADR 2026-10-17 後續裁決。另記 guard-taint-api 合併後改用，移除對 `guardState()` 的依賴，本輪不改 | notes「第三輪」段 |
+
+### 審查的 live 觀察清單
+
+已併入設計 §10 的 live 前置條件與 §9 待查查法。三個要點：先錄未改寫基準；大廳與對局連線都記錄，含未解析與非 RPC；只觀察、不點擊會提交的操作。Astra 指出「不點表情」排除不了自動送出路徑，這點維持在待查，不宣稱已排除。

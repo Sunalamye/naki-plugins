@@ -532,6 +532,22 @@ test('the page lock survives re-running the plugin source in the same page', () 
   assert.equal(rig.calls.length, 0);
 });
 
+test('own-player validation does not depend on which field the settings change', () => {
+  const cases = [
+    [{ ...SETTINGS, titleId: 0 }, [...uv(1, ME), ...uv(3, 300), ...uv(3, 301), ...view(2, 1000)]],
+    [{ ...SETTINGS, views: '' }, [...uv(1, ME), ...uv(3, 300), ...ld(10, [...uv(1, 2), ...uv(2, 1000), ...uv(2, 1001)])]],
+    [{ ...SETTINGS, views: '' }, [...uv(1, ME), ...uv(3, 300), ...ld(10, [...uv(1, 2), ...uv(2, 1000), 0x00, 0x01])]],
+    [{ ...SETTINGS, views: '' }, [...uv(1, ME), ...uv(3, 300), ...ld(10, [...uv(1, 2), ...uv(1, 3), ...uv(2, 1000)])]],
+  ];
+  for (const [settings, mine] of cases) {
+    const rig = setup(settings);
+    rig.ready();
+    unchanged(rig.auth(ld(2, mine)));
+    assert.equal(rig.calls.length, 0, JSON.stringify(settings));
+    assert.ok(rig.logs.some(l => l.includes('結構不符或重複')));
+  }
+});
+
 // ---- v1：送出守衛 ----
 test('guarded requests pass untouched before any rewrite, and throw after one (lobby or in-game)', () => {
   let rig = lobbyReady();

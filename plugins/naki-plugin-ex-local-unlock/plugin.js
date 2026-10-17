@@ -196,18 +196,11 @@
     if (!players) return log('authGame 結構不符，不改寫');
     var mine = players.filter(function (pl) { return only(collect(b, pl.from, pl.to, 1, 0)) === selfId; });
     if (mine.length !== 1) return log('找不到唯一的自家玩家，不改寫');
-    var me = mine[0];
-    if (cfg.titleId) {
-      var title = single(b, me.from, me.to, 3, 0);
-      if (!title) return log('稱號欄位結構不符或重複，不改寫');
-      planEdits('稱號', title, cfg.titleId, edits, log);
-    }
-    var slots = Object.keys(cfg.views);
-    if (slots.length) {
-      var items = viewItems(b, me);
-      if (!items) return log('裝扮欄位結構不符，不改寫');
-      slots.forEach(function (slot) { planEdits('裝扮 slot ' + slot, items[slot] || [], cfg.views[slot], edits, log); });
-    }
+    // 先驗完自家玩家的稱號與全部裝扮，與設定要改哪一項無關；任一不符整則不改。
+    var me = mine[0], title = single(b, me.from, me.to, 3, 0), items = viewItems(b, me);
+    if (!title || !items) return log('自家玩家的稱號或裝扮結構不符或重複，不改寫');
+    if (cfg.titleId) planEdits('稱號', title, cfg.titleId, edits, log);
+    Object.keys(cfg.views).forEach(function (slot) { planEdits('裝扮 slot ' + slot, items[slot] || [], cfg.views[slot], edits, log); });
     if (!edits.length) return;
     if (!ctx.replace(applyEdits(b, edits))) return log('replace 被拒，不改寫');
     page.touched = true;

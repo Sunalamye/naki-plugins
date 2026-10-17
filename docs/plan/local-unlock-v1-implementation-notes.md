@@ -16,7 +16,7 @@
 4. **派工的 F1–F3 與 v0 設計編號不同**：v0 設計 F1 是對局內角色（因 `broadcastInGame` 外送風險不做），大廳角色是 F4、稱號是 F6。v1 做的是 v0 設計的 F4（角色、皮膚、頭像，不含星標）與 F6 的「顯示」部分，加上保留 v0.1 的 F2、F3。F6 的稱號清單（`fetchTitleList`）不在 Phase 4 允許清單，不做。
 5. **設定沿用平坦 key，不用 v0 設計 §5.3 的 `features`／`overrides` JSON**：新增 `characterId`、`skinId` 兩個 number。舊 key 不改名不改型別，免遷移。
 6. **守衛宣告 19 個全部**：派工寫「守衛所有換裝類方法」，Naki 的 `GUARDABLE_METHODS` 只有 19 個能宣告，全部宣告，包含領獎、送禮等非換裝方法（保守：多擋不少擋）。
-7. **插件自擋，不只靠 Naki 污染**：Naki 污染後，若 L3 總開關開著且守衛者放行，守衛方法會原樣送出（`guardFailure`）。插件因此在改過任何一則後，對守衛方法一律拋錯，Naki 判 `hook_threw` 本地拒送。旗標放在 `window.__nakiLocalUnlockTouched`，熱停用再啟用不重置。對局內的等長改寫也會設旗標，雖然 Naki 只對大廳連線污染。
+7. **插件自擋，不只靠 Naki 污染**：Naki 污染後，若 L3 總開關開著且守衛者放行，守衛方法會原樣送出（`guardFailure`）。插件因此在改過任何一則後，對守衛方法一律拋錯，Naki 判 `hook_threw` 本地拒送。旗標現為 `window.__nakiLocalUnlock.touched`（第二輪起，與大廳鎖 `lobbyLocked` 同一物件；第一輪的 `window.__nakiLocalUnlockTouched` 已取代），熱停用再啟用不重置。對局內的等長改寫也會設旗標；第二輪起對局內只在宿主已污染後才改（第 13 項）。
 8. **禮貌降級的判斷**：以本插件 grant 含 `reshapeReceive`、`sendGuard` 含全部 19 個、`__nakiPlugins.isReshapeForbidden` 存在三者同時成立為準。舊版 Naki 的 Swift manifest 解碼會忽略 `sendGuard`，所以 grant 裡沒有。不成立時連對局內等長也不做（派工：無 Phase 4 → 插件停用）。
 9. **kill-switch 只看 `replace` 回傳值**：不讀 `__nakiWebSocket.diagnostics()`（v0.1 的靜態測試禁止插件碰 `__nakiWebSocket`）。變長 replace 回 `false` 一次就停本頁面的大廳改寫；原因可能是鎖死、不合規或方法被禁，插件不區分。
 10. **補進的角色只寫 `charid` 與 `skin`**：`level`、`exp` 等用 proto3 預設值 0，不猜遊戲要的初始值。
@@ -47,14 +47,11 @@
 15. **重複 slot 的 `ViewSlot` 仍允許**：Astra 第 3 條針對單值欄位。`views` 是 repeated message，同一 slot 出現多個 `ViewSlot` 時沿用 v0.1（全部等長才改）；單一 `ViewSlot` 內 `slot`、`item_id` 重複則整則不改。
 16. **缺 `account_id` 的 Account 改為記 log**：第一輪把它當他人靜默略過；現在要求 `account_id` 恰一筆，否則按結構不符記 log。真正的他人資料仍靜默。
 17. **`.gitignore` 是新檔**：repo 原本沒有 `.gitignore`，新增只含 `.swfd/` 一行。master 的工作樹在合併前仍會顯示未追蹤的 `.swfd/`。
-18. **盤點的「證明不可能」只到請求欄位層級**：(c) 類以「id 來源回應本插件不改」或「欄位不是 id」為理由，沒有逐一追遊戲客戶端程式碼；未能證明的一律放 (b)。
+18. **盤點的「證明不可能」只到請求欄位層級**（第三輪已取代，見第 19 項）：第二輪的 (c) 以「id 來源回應本插件不改」或「欄位不是 id」為理由，沒有追遊戲客戶端程式碼。
 
-### 待宿主（主線另開 Naki 小包）
+### 待宿主
 
-1. **擴充 `GUARDABLE_METHODS`**（回應型別 field 1 皆已確認是 Error，`liqi.json`）：`.lq.Lobby.sayChatMessage`、`sendClientMessage`、`clientMessage`、`logReport`、`majClubActivityStartDay`、`majClubActivitySaveRoomData`、`majClubActivityUpgradeCharacterPower`、`majClubActivityUpgradeCharacterTag`、`majClubActivityFinishDay`、`mmoActivityDebugSetTeamCandidate`、`createRoom`、`createCustomizedContest`、`updateManagerCustomizedContest`。對應欄位見設計 §9 (b) 表。擴充後本插件的 `sendGuard` 與 `methods` 要同步加上。
-2. **對局連線的守衛**：`.lq.FastTest.broadcastInGame.content`、`inputGameGMCommand.json_data` 目前結構上不可守衛（守衛只在大廳連線，FastTest 一律繞過）。需要宿主決定是否支援，或以 live 證明表情面板只列真實擁有的表情。
-3. **插件主動污染 API**：例如 `__nakiPlugins.taint(id)` 或 `ctx.taint()`，讓插件在任何改寫（含對局內）前先把自己標為已污染，不必依賴「大廳改寫一次」。
-4. **把污染狀態查詢寫進契約**：本插件用 `guardState().tainted` 判斷宿主是否已接手；請宿主記載它或提供 `isTainted(id)` 之類的穩定 API。
+已由第三輪段落的「待宿主：依 live 證據裁定的候選清單」取代。
 
 ### 驗收（第二輪）
 
@@ -65,6 +62,34 @@
 | Naki `node scripts/plugin-regression.cjs <本 worktree>` | 38／38 | `r2-plugin-regression.log` |
 | 變異 35 個（第一輪 19 個對到新程式，加第二輪 16 個） | 全部被殺；初跑 1 個存活（`ViewSlot` 內 `item_id` 重複），補單測後被殺 | `r2-mutation.log`、`r2-mutate.cjs` |
 | 外送入口盤點 | 117 行命中，分 (a) 19、(b) 11 列、(c) 6 類 | `r2-inventory.cjs`、`r2-inventory.txt` |
+
+## 第三輪（回應 Astra 第二輪：0 擋 3 應修 1 建議，全採納）
+
+逐條回應：`docs/plan/local-unlock-v1-review-response.md` 第二輪段。
+
+### Deviations（第三輪）
+
+19. **(c) 只留 schema 層可證明的**：空請求 79 個、bool 欄位 100 個。第二輪以語意或來源推論排除的（背包、活動、開關型 `uint32`、使用者文字、付款）全部移到待查。
+20. **盤點改為全部葉欄位**：`r3-inventory.cjs` 遞迴展開 443 個 RPC 請求的全部葉欄位，共 1342 列，不再用關鍵字篩選。(b) 加入 `gameMasterCommand.command` 與 `createRoom.pre_rule`；`openManualItem.select_id` 在待查。(b) 與待查的界線是「是否優先 live 觀察」，兩者都沒有證明。
+21. **對局內驗證移到規劃之前**：自家玩家的 `title` 單值、每個 `ViewSlot` 結構完整（含巢狀 field 0）與 `slot`、`item_id` 單值，不論設定改哪一項都先驗；任一不符整則不改。
+
+### 待宿主：依 live 證據裁定的候選清單
+
+宿主 ADR 的 2026-10-17 後續裁決（Naki repo `docs/archive/plan/plugin-v2-b2-adr-2026-10-17.md` 末段「守衛名單擴充與插件主動污染」）：**不立刻擴充守衛名單**，先在 v2.20.0 live 只觀察，依證據決定擴充哪幾個；對局連線守衛延後另案；先做插件主動污染 API 與污染查詢契約（工作包 guard-taint-api）。
+
+1. **守衛名單擴充候選**（待 live 證據裁定，不是確定清單）：設計 §9 (b) 的 Lobby 方法共 14 個，回應型別 field 1 皆為 Error。分別是 `sayChatMessage`、`sendClientMessage`、`clientMessage`、`logReport`、`majClubActivityStartDay`、`majClubActivitySaveRoomData`、`majClubActivityUpgradeCharacterPower`、`majClubActivityUpgradeCharacterTag`、`majClubActivityFinishDay`、`mmoActivityDebugSetTeamCandidate`、`createRoom`、`createCustomizedContest`、`updateManagerCustomizedContest`、`gameMasterCommand`。待查欄位若 live 或離線追值發現帶入補進的 id，再加入候選。擴充後本插件的 `sendGuard` 與 `methods` 同步加上。
+2. **對局連線守衛**（宿主延後另案）：`broadcastInGame.content`、`inputGameGMCommand.json_data`。
+3. **改用 guard-taint-api**：宿主提供 `ctx.taint()`／`isTainted()` 並寫進契約、合併後，本插件改用它，在任何改寫前先自行標污染，並移除對未記載 `guardState()` 的依賴。本輪不改（尚未合併）。
+
+### 驗收（第三輪）
+
+| 項目 | 結果 | 證據 |
+|---|---|---|
+| `NAKI_ROOT=<Naki 577caf9> node --test tests/*.cjs` | 66／66（local-unlock 44、local-unlock-naki 9、name-hider 7、settings-pages 6）；不設 `NAKI_ROOT` 時 57 通過、9 略過 | `r3-plugin-tests.log` |
+| Naki `plugin-regression.cjs` | 38／38 | `r3-plugin-regression.log` |
+| 變異 38 個（第二輪 35 個，加第三輪 3 個驗證順序） | 全部被殺 | `r3-mutation.log`、`r3-mutate.cjs` |
+| 新交叉測試在 `d24d115` 的插件上 | 紅（1 失敗），在本輪插件上綠 | 本機重跑 |
+| 全葉欄位盤點 | 1342 列：(a) 44、(b) 21、(c) 179、待查 1098 | `r3-inventory.cjs`、`r3-inventory.tsv` |
 
 ## 未驗證
 
