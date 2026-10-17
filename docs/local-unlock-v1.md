@@ -184,3 +184,116 @@
 ### 收尾
 
 插件目錄已刪，與開始前相同（`live/Z1-plugins-dir-after.txt`）；觀察器隨重載消失。plist 只多出本插件四個設定鍵（`characterId`、`enabled`、`skinId`、`testAccountAck`），依指示未 `defaults write`，清除與否交主線（`live/Z2-prefs-diff.txt`）。App 仍是 2.20.0（`live/Z3-status.json`）。
+
+## 12. 受限 live 第二輪（2026-10-17）
+
+**取證，不是 I2 驗收。** 目的：找出觸發 `fetchCharacterInfo`／`fetchAccountInfo` 的操作，觸發後取證 v1 現有機制。宿主 `/Applications/Naki.app` 2.20.0，插件來源 master `6f22fb4`（插件檔最後變更 `4f55e7a`），測試帳號，L3 全程關。證據在 `naki-plugins/.swfd/logs/unlock-v1-live2/`（下稱 `live2/`），每段一組 `<段>.json`（方法清單、接收值、插件診斷）與 `<段>.png`；全程紀錄 `B-all.json`、`R-all-attempt1.json`、`R-all-attempt2.json`；腳本在 `live2/scripts/`。觀察器沿用第一輪 `observer.js`，每次重載後在 gateway 建立前裝上（每段 `conns` 含登入的兩條 `/gateway`）。開頁點擊用 `/js` 對 `#unity-canvas` 派送合成 PointerEvent／MouseEvent（主線授權），每次點擊前截圖判定開頁或提交。
+
+### 主要發現
+
+1. **`fetchAccountInfo` 唯一的觸發點是「對局結束後經重連回大廳」。** `room_quick_test` 開局、投票結束、離房後執行 `bot_sync`，客戶端重新登入並重驗對局（`authGame` 回錯誤，畫面「之前的對局已結束」），接著對自己送 `fetchAccountInfo`（`live2/B24-after-game-wait.json`、`R2d-after-bot-sync.json`、`R2k-after-bot-sync.json`）。下表所列頁面都不送它。
+2. **`fetchCharacterInfo` 全程未出現。** 兩輪共 4 次頁面重載登入、10 次重連，加上宿舍、角色詳情、裝扮分頁、皮膚清單各開兩輪以上，`received` 與送出清單都沒有它（`B-all.json`、`R-all-attempt2.json`）。宿舍與皮膚清單的資料來自登入時 `fetchInfo.character_info` 的快取。**設計需改走 `fetchInfo.character_info`**，插件才能影響角色清單與皮膚頁。
+3. **改寫發生，且有顯示效果。** 第二次改寫嘗試中，`fetchAccountInfo` 原始 `avatar_id=400201`，遊戲收到 `400101`；`loading_image` 未變（`R2d`、`R2k` 的 `recvs`）。插件日誌「已改寫 .lq.Lobby.fetchAccountInfo」「已污染」。改寫是等長的，`reshape.attempted=0`。
+4. **污染只在改寫後成立，名單完整。** 改寫前 `tainted` 為空、`page.touched` 為假；改寫後 `tainted` 含 19 個方法，與 `sendGuard` 逐一相同，守衛 `log` 為空（`R-all-attempt1.json`、`R-all-attempt2.json` 的 `guard`）。全程沒有任何守衛方法的 attempt 或 wire。
+
+### 頁面→method 對照（基準輪，插件未啟用）
+
+改寫輪改寫前重走同一序列，方法清單與基準相同（`R3`–`R19`）。
+
+| 操作 | 送出的 method（不含心跳、`loginBeat`） | 證據 |
+|---|---|---|
+| 頁面重載登入 | `oauth2Check`、`oauth2Login`、`fetchLastPrivacy`、`loginSuccess`、`prepareLogin`、`fetchAnnouncement`、`fetchInfo`、`fetchQuestionnaireList`、`fetchDailySignActivityData`、`fetchChallengeInfo`、`fetchChallengeSeason`、`fetchSeerReportList`、`fetchReviveCoinInfo`、`fetchDailyTask`、`fetchConnectionInfo`、`fetchAchievementRate`、`fetchRollingNotice` | `B1-login`、`R1-login` |
+| 關閉公告欄 | `readAnnouncement` | `B-all.json` |
+| 左上段位徽章（誤點） | 無；只切換四麻／三麻段位顯示 | `B3a-rank-badge-toggle` |
+| 個人資料頁（點名牌） | `fetchAccountStatisticInfo`、`fetchAccountChallengeRankInfo`、`fetchCommentList`、`fetchAccountInfoExtra` | `B3-profile`、`R3-profile` |
+| 稱號清單（查看稱號） | `fetchTitleList` | `B4-title-list` |
+| 宿舍 | 無 | `B6-dorm` |
+| 角色詳情（查看） | 無 | `B7-char-detail` |
+| 宿舍裝扮分頁 | 無 | `B9-dorm-outfit-tab` |
+| 皮膚清單（更換服飾頁） | 無 | `B10-skin-list` |
+| 好友 | `fetchRecentFriend`、`fetchMultiAccountBrief` | `B12-friends` |
+| 活動頁 | 無 | `B14-activity` |
+| 前往活動（青雲之志） | `fetchAmuletActivityData`、`amuletActivityFetchBrief` | `B15-activity-enter` |
+| 友人場、建房設定面板 | 無 | `B17`、`B18` |
+| 段位場子選單（誤點） | 無 | `B19-back-lobby` |
+| `room_quick_test`＋forceReconnect 進局 | Naki 自送 `createRoom`、`addRoomRobot`、`startRoom`；遊戲送 `oauth2Login`、`fetchRoom`、`fetchServerTime`、`loginSuccess`、`authGame`、`enterGame`、`fetchGamePlayerState` 等 | `B21-game-enter` |
+| 對局內表情面板（只開） | 無 | `B22-game-emote-panel` |
+| 對局結束後 `bot_sync` | `oauth2Login`、`authGame`（回錯誤）、**`fetchAccountInfo`** | `B24-after-game-wait` |
+
+大廳沒有聊天面板可開：帳號沒有好友，好友頁只有列表、申請、查找、近期對局。聊天面板只在對局內有表情面板。
+
+### 改寫輪過程
+
+設定頁填 `characterId=200001`、`skinId=400101`，`titleId` 留空，以 AX 聚焦鍵入，插件頁 AXPress 啟用（`live2/R0-plugin-settings.png`）。帳號開了隨機主角色，兩個角色輪流當主角色：
+
+| 登入方式 | 觀察 |
+|---|---|
+| 頁面重載 | 依序 200001、200002、200001、200002（`B1`、`R1`、`R2a`、`C2`） |
+| forceReconnect 進局 | 5 次都換成另一個角色（`B21`、`R21`、`R2b`、`R2e`、`R2h`） |
+| `bot_sync` | 5 次都保持不變（`B24`、`R24`、`R2d`、`R2g`、`R2k`） |
+
+規律只是觀察，原因未驗證。
+
+- **第一次嘗試**（`R1`–`R24`，`R-all-attempt1.json`）：觸發 `fetchAccountInfo` 時，實際主角色剛好是 200001，等於目標。原始值與交付值相同，看不出顯示差異。插件仍標記 `touched`，污染 19 個。
+- **第二次嘗試**（`R2a`–`R2k`，`R-all-attempt2.json`）：觸發時實際主角色是 200002，改寫可區分。
+
+### 顯示效果（第二次嘗試，污染中，實際主角色二階堂 200002）
+
+| 畫面 | 顯示 | 證據 |
+|---|---|---|
+| 大廳立繪 | **一姬**（改寫值） | `R2d-after-bot-sync.png`、`R2k-after-bot-sync.png` |
+| 個人資料頁立繪 | **一姬**（改寫值） | `R3a-tainted-profile.png` |
+| 宿舍「使用中」 | 二階堂（實際值） | `R3c-tainted-dorm.png` |
+| 皮膚清單 | 二階堂的皮膚，「使用中」為二階堂初始形象 | `R3d-tainted-skin-list.png` |
+| 對局內自家頭像 | 二階堂 | `R2i-tainted-emote-panel.png` |
+| 對局內表情面板 | 只有二階堂的 9 個表情，沒有一姬的表情 | `R2i-tainted-emote-panel.png` |
+
+同一畫面組合中，大廳與宿舍顯示的主角色不一致。宿舍的主角色不是取自 `fetchAccountInfo`，來源未驗證。
+
+污染中進局，`authGame` 原樣交付（`R2h-tainted-game-enter.json`，原始與交付都是 `charid=200002`、`skin=400201`）。這符合 §5.3：對局內只改稱號與裝扮，本輪兩者都沒設定。所以「`authGame` 等長改寫」本輪未發生，也沒有可測的對象。
+
+### (b) 21 列
+
+| 入口 | 觀察 |
+|---|---|
+| `createRoom` | 只有 Naki 自送（attempt 層 `naki=true`），形狀 `1:v, 2:ld18`，無命中 |
+| `logReport` | 本輪全程未出現（第一輪基準曾出現 1 次） |
+| `broadcastInGame` | 未出現，對局內只開表情面板、未點表情 |
+| `sayChatMessage`、`sendClientMessage`、`clientMessage`、`majClubActivity*`（5 個）、`mmoActivityDebugSetTeamCandidate`、`createCustomizedContest`、`updateManagerCustomizedContest`、`gameMasterCommand`、`inputGameGMCommand` | 本操作未觀察到 |
+
+三份全程紀錄的 wire 層命中目標集合都是 0 次，不透明或未解析的送出也是 0 次（`B-all.json`、`R-all-attempt1.json`、`R-all-attempt2.json` 的 `summary`）。
+
+### 對 §9 待查欄位的影響
+
+- 污染中實際送出、且 wire 層沒帶目標 id 的方法：`fetchAccountStatisticInfo`、`fetchAccountChallengeRankInfo`、`fetchCommentList`、`fetchAccountInfoExtra`（個人資料頁），以及重連與進局時的 `loginSuccess`、`fetchServerTime`、`fetchRoom`、`enterGame`、`fetchGamePlayerState`。這只是「本操作在本帳號未觀察到」，不是排除。觀察器不解碼登入類、`authGame` 與心跳，這些沒有命中比對。
+- 其餘待查欄位本輪沒有新證據。稱號清單、好友、活動、建房設定只在改寫前開過，污染後沒有重開。
+- 本機儲存：基準與停用重載後都是 `localStorage` 59 鍵、命中目標 0（`B-all.json`、`C3-storage.json`）。改寫時的目標 200001／400101 本身也是帳號擁有的值，這項比對只能證明沒有新增命中鍵。
+
+### 停用→重載
+
+| 步 | 結果 | 證據 |
+|---|---|---|
+| 插件頁 AXPress 停用 | `enabledIds` 移除本插件；插件離開註冊清單；污染仍是 19 個，`page.touched` 仍為真（到重載前） | `C1-before-reload.json` |
+| 重載 | 污染為空；`__nakiLocalUnlock` 不存在；大廳立繪回到實際主角色二階堂；`fetchInfo`、`oauth2Login` 與基準同形 | `C2-after-reload.json`、`C2-after-reload.png` |
+
+重載後的登入又抽到 200002，大廳顯示與實際值相符，沒有看到改寫值殘留。快取窗口只驗到「頁面重載後不殘留」，沒測持久快取（例如 IndexedDB 內容）。
+
+### 結論
+
+- `fetchAccountInfo` 只在對局結束後經重連回大廳時出現。插件改它的 `avatar_id`，會改到大廳立繪與個人資料頁立繪；宿舍、皮膚清單、對局內角色與表情不受影響。
+- `fetchCharacterInfo` 在所有允許開的頁面都不出現。要讓角色清單與皮膚頁生效，要改 `fetchInfo.character_info`。要讓登入當下的大廳生效，要改 `ResLogin.account`。兩者都是設計變更，待裁決。
+- 一般登入不會觸發改寫，所以實際使用時插件幾乎不會作用；作用時大廳與宿舍顯示會互相矛盾。
+- 守衛名單在改寫後完整生效，本輪沒有任何守衛方法或 (b) 入口由遊戲送出。這仍是單帳號、限定操作的觀察，不構成 I2 驗收。
+
+### Deviations
+
+- 關閉公告欄時，遊戲自送一次 `readAnnouncement`（基準輪）。這是開頁類操作的附帶送出，與角色 id 無關。
+- 誤點兩次：左上段位徽章（切換段位顯示）、從建房面板返回後點到段位場（開子選單）。兩次都沒有送出。
+- 「之前的對局已結束」「遊戲已經關閉」對話框的「確認」鈕屬於指示列出的不得點按鈕，一律不點，改用 `bot_sync` 或重載處理。因此第一次嘗試污染後被對話框擋住，沒有重走大廳頁面。
+- 第一次改寫嘗試的目標撞上實際主角色，於是重載做第二次嘗試，沒有改設定。
+- 污染後只重開了個人資料、宿舍、皮膚清單與對局表情面板。稱號清單、好友、活動、建房設定沒有在污染中重開。
+- 收尾多做一次 app 重啟，讓記憶體中的插件清單與目錄一致。第一輪沒重啟，留下過的殘留曾讓旁人誤操作插件頁。
+
+### 收尾
+
+插件目錄已刪，與開始前相同（`live2/Z1-plugins-dir-after.txt`）。四個設定鍵以檔案路徑形式 `defaults delete`，`enabledIds` 不含本插件；plist 與開始前備份 `plist2-before.plist` 的 diff 為空（`live2/Z2-prefs-diff.txt`）。重啟後只註冊暱稱隱藏、牌面變色兩個插件。App 仍是 2.20.0（`live2/Z3-status.json`）。
