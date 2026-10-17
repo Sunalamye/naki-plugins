@@ -60,3 +60,10 @@
 | 精確化：結果相同不算改過 | 大廳與對局內都先比對 bytes，相同就不送 `replace`、不設 `touched`。README 改為「改寫且 bytes 確實有變」 | 單測「a rewrite that yields the original bytes…」，含只差最後一 byte 的反例；修前紅（`r4-red-before-fix.log`） |
 | 可用性：int32 負值 | 允許 10 byte varint，11 byte 拒 | 單測「varints up to 10 bytes…」；修前紅 |
 | 重載後持久快取 | notes 補記保證只到重載為止；README 限制段同步 | notes「保證只到頁面重載為止」 |
+
+## 主線裁決（2026-10-17 第一輪 live 後）
+
+- **合併進 master 而不是等觸發驗證**：測試 71/71、Astra 三輪 0 擋、live 無 I2 違規；README 已標「I2 未驗收、不發布」。留在分支只會讓證據與 worktree 一起散失，合併留證成本更低。
+- **先二輪 live 找觸發點，再決定要不要改設計**：第一輪零改寫的原因是登入走 `fetchInfo.character_info` 與登入回應 `account`，而非插件壞掉。唯讀點開個人資料／宿舍頁就能確認 `fetchCharacterInfo` 由誰觸發，比直接改走 `fetchInfo`（變長改寫新路徑、要重審）便宜一個量級；若仍不觸發再開 v1.1。
+- **候選改法已查**：`fetchInfo` 不在宿主變長禁改名單；`oauth2Login` 回應在名單內只能等長改寫，零稱號帳號的 title 一個 byte 改不了，頭像 id 等長或可。
+- **plist 殘留四鍵由主線清**：用檔案路徑形式 `defaults delete`，不用 `defaults write`。
