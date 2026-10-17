@@ -88,3 +88,17 @@
 1. `authReq` 是單一變數，沒有依 msgId 配對。推測只有在前一個 authGame 請求沒有回應、下一個又是壞包時才會誤比對，風險低，未驗證。
 2. Naki 端的 `pendingMethods` 只以 msgId 為鍵，不分 socket。大廳與對局連線若同時用到相同 msgId，RESPONSE 的 method 可能對錯。推測，未在 live 觀察，非本插件範圍。
 3. `ViewSlot` 另有 `item_id_list`(4)，插件只處理 `item_id`(2)。若某 slot 實際以 `item_id_list` 顯示，覆寫可能無效，只影響效果、不影響安全。需 live 確認。
+
+## live 結果（2026-10-17，測試帳號「明天吃飯」，Naki 2.18.0；證據 Naki repo `.swfd/logs/unlock-v01-live/`）
+
+- 插件掛載、grant（`rewriteReceive`、6 methods）、身分比對（登入 account_id ＝ authGame REQUEST field 1，唯一自家 PlayerGameView）全部成立；`titleId` 經 Swift 到 JS 為整數 600002。
+- **結構性缺口**：沒有任何稱號的帳號，`PlayerGameView.title`（field 3）是 1 byte 的 0；`lqc.lqbin` 的 `item_definition.title` 151 列 id 600001–600159 全是 3 byte varint。等長改寫永遠觸發「稱號 varint 長度不同，略過」，`ctx.replace` 從未被呼叫，畫面維持「暫無稱號」。F3 在這類帳號不可能生效。
+- 自家 `views`（field 10）不存在，F2 在這個帳號無法測。
+- 欄位號已 live 核對：ResLogin account_id=2、Account.title=7、ReqAuthGame account_id=1、ResAuthGame players=2、PlayerGameView account_id=1、title=3。ViewSlot 未驗。
+- 自動打牌與 Swift 解析不受插件影響；外送無任何換裝、稱號、背包類請求。
+
+## 裁決（2026-10-17，統帥代決）
+
+- v0.1 維持不發布。F3 要生效需要兩者之一：帳號已有一個稱號（3 byte 換 3 byte），或變長 receive replace（Naki plugin-v2 B 包，Phase 4 gate 後）。v0.1 的「等長」前提對零稱號帳號是空集合，文件 §1 的 F3 範圍補註「限帳號已持有至少一個稱號」。
+- 不用 1–127 的假 id 強制觸發 replace：那不是遊戲存在的稱號，客戶端反應未知，且對使用者沒有價值；保守不做。
+- 下一步順序不變：Naki 變長 replace 完成後，解鎖 v1 一併涵蓋 F3 零稱號情境。
