@@ -43,21 +43,38 @@ const withMe = (players, patch) => players.map(p => p.id === ME ? { ...p, ...pat
 const REWRITTEN = { title: 400, views: [[1, 1000], [2, 2000]] };
 const SETTINGS = { enabled: true, testAccountAck: true, titleId: 400, views: '2=2000' };
 
-function setup(settings = SETTINGS, { canReplace = true } = {}) {
+const ID = 'naki-plugin-ex-local-unlock';
+const GUARD = ['changeCharacterSkin', 'changeMainCharacter', 'changeAvatar', 'useTitle', 'setRandomCharacter',
+  'updateCharacterSort', 'setHiddenCharacter', 'changeCharacterView', 'changeCommonView', 'saveCommonViews',
+  'useCommonView', 'setLoadingImage', 'sendGiftToCharacter', 'upgradeCharacter', 'addFinishedEnding',
+  'receiveEndingReward', 'receiveCharacterRewards', 'mmoActivitySetCharacter', 'mmoActivitySetTeamMember'].map(m => '.lq.Lobby.' + m);
+const PHASE4 = { capabilities: ['rewriteReceive', 'reshapeReceive'], sendGuard: GUARD };
+
+// grant：Naki 下發給本插件的授權；null 表示舊版 Naki 沒有 Phase 4（沒有 isReshapeForbidden、grant 無 sendGuard）。
+function setup(settings = SETTINGS, { canReplace = true, grant = PHASE4, replaceResult = () => true, win = {} } = {}) {
   let spec;
   const logs = [];
-  vm.runInNewContext(source, { window: { __nakiPlugins: { register(s) { spec = s; } } }, Number, Object, Math });
+  win.__nakiPlugins = { register(s) { spec = s; }, ...(grant ? { isReshapeForbidden: () => false } : {}) };
+  win.__nakiPluginGrants = grant ? { [ID]: grant } : {};
+  vm.runInNewContext(source, { window: win, Number, Object, Math, Uint8Array, Array });
   const mk = (b, method, type) => {
     const ctx = { direction: type === 2 ? 'send' : 'receive', type, method, bytes: b, payload: range(b), isNaki: rig.naki, settings, log: m => logs.push(m) };
-    if (canReplace) ctx.replace = nb => nb.length === b.length && (b.set(nb), calls.push(Array.from(nb)), true);
+    if (canReplace) ctx.replace = nb => {
+      if (!replaceResult(nb, b)) return false;
+      calls.push(Array.from(nb));
+      if (nb.length === b.length) b.set(nb);
+      return true;
+    };
     return ctx;
   };
   const calls = [];
   const rig = {
-    spec, logs, calls, naki: false,
+    spec, logs, calls, win, naki: false,
     login: (id = ME, method = '.lq.Lobby.login') => spec.onReceive(mk(envelope(3, 1, method, [...(id === null ? ld(1, uv(1, 2500)) : uv(2, id)), ...ld(3, uv(1, 999))]), method, 3)),
     notify: method => spec.onReceive(mk(envelope(1, 0, method, []), method, 1)),
     request: (id = ME) => spec.onSend(mk(envelope(2, 7, '.lq.FastTest.authGame', [...uv(1, id), ...str(2, 'tok')]), '.lq.FastTest.authGame', 2)),
+    send: method => spec.onSend(mk(envelope(2, 9, method, uv(1, 1)), method, 2)),
+    lobby: (method, payload) => spec.onReceive(mk(envelope(3, 8, method, payload), method, 3)),
     auth(payload, edit) {
       const b = envelope(3, 7, '.lq.FastTest.authGame', payload);
       const before = Array.from(b);
@@ -292,6 +309,158 @@ test('slot 0 is the view whose slot field is omitted', () => {
   assert.deepEqual(out.bytes, expected({ players: withMe(players, { views: [[0, 2000], [2, 1000]] }) }));
 });
 
+// ---- v1：大廳變長改寫 ----
+const CHARS = '.lq.Lobby.fetchCharacterInfo', ACCOUNT = '.lq.Lobby.fetchAccountInfo', SKIN = '.lq.Lobby.changeCharacterSkin';
+const CHAR = 200005, SKIN_ID = 400501;
+const V1 = { ...SETTINGS, titleId: 600002, characterId: CHAR, skinId: SKIN_ID };
+const ch = (id, skin) => ld(2, [...uv(1, id), ...uv(2, 3), ...uv(5, skin)]);
+const charInfo = ({ chars = [[200001, 400101]], skins = [400101], packed = true, main = 200001 } = {}) => [
+  ...chars.flatMap(([id, skin]) => ch(id, skin)),
+  ...(packed ? ld(3, skins.flatMap(vi)) : skins.flatMap(x => uv(3, x))), ...uv(4, main), ...uv(5, 3)];
+const account = (id, { title = 0, avatar = 400101 } = {}) => [...uv(1, id), ...str(2, 'me'), ...uv(7, title), ...uv(11, 100), ...uv(13, avatar)];
+const res = (method, payload) => Array.from(envelope(3, 8, method, payload));
+const lobbyReady = (settings = V1, opts) => { const rig = setup(settings, opts); rig.login(); return rig; };
+
+test('fetchCharacterInfo, character not owned: main, skin and a new character are appended; other bytes kept', () => {
+  for (const packed of [true, false]) {
+    const rig = lobbyReady();
+    rig.lobby(CHARS, charInfo({ packed }));
+    const keep = charInfo({ packed }).slice(0, -(uv(4, 200001).length + uv(5, 3).length));
+    assert.deepEqual(rig.calls, [res(CHARS, [...keep, ...uv(5, 3),
+      ...ld(2, [...uv(1, CHAR), ...uv(5, SKIN_ID)]), ...uv(3, SKIN_ID), ...uv(4, CHAR)])]);
+    assert.ok(rig.calls[0].length > res(CHARS, charInfo()).length);
+  }
+});
+test('fetchCharacterInfo, character owned: its skin is replaced in place and an owned skin is not duplicated', () => {
+  const rig = lobbyReady();
+  rig.lobby(CHARS, charInfo({ chars: [[200001, 400101], [CHAR, 400502]], skins: [400101, SKIN_ID, 400502], main: 200001 }));
+  const mine = ld(2, [...uv(1, CHAR), ...uv(2, 3), ...uv(5, SKIN_ID)]);
+  assert.deepEqual(rig.calls, [res(CHARS, [...ch(200001, 400101), ...mine, ...ld(3, [400101, SKIN_ID, 400502].flatMap(vi)), ...uv(5, 3), ...uv(4, CHAR)])]);
+});
+test('fetchAccountInfo, own account with zero title: title and avatar change length and are rewritten', () => {
+  const rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, account(ME)));
+  const next = [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), ...uv(7, 600002), ...uv(13, SKIN_ID)];
+  assert.deepEqual(rig.calls, [res(ACCOUNT, ld(2, next))]);
+  assert.equal(rig.calls[0].length, res(ACCOUNT, ld(2, account(ME))).length + 2);
+});
+test('fetchAccountInfo: title only or skin only touches only that field', () => {
+  let rig = lobbyReady({ ...V1, characterId: 0, skinId: 0 });
+  rig.lobby(ACCOUNT, ld(2, account(ME)));
+  assert.deepEqual(rig.calls, [res(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), ...uv(13, 400101), ...uv(7, 600002)]))]);
+  rig = lobbyReady({ ...V1, titleId: 0 });
+  rig.lobby(ACCOUNT, ld(2, account(ME)));
+  assert.deepEqual(rig.calls, [res(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(7, 0), ...uv(11, 100), ...uv(13, SKIN_ID)]))]);
+});
+test('other accounts, unknown identity, or the account missing: no rewrite', () => {
+  let rig = lobbyReady();
+  rig.lobby(ACCOUNT, ld(2, account(222)));
+  rig.lobby(ACCOUNT, ld(2, account(222).slice(2)));
+  assert.equal(rig.calls.length, 0);
+  assert.deepEqual(rig.logs, []);
+  rig = setup(V1);
+  rig.lobby(ACCOUNT, ld(2, account(ME)));
+  rig.lobby(CHARS, charInfo());
+  rig.login(); rig.notify('.lq.NotifyAccountLogout');
+  rig.lobby(CHARS, charInfo());
+  assert.equal(rig.calls.length, 0);
+});
+test('error responses and malformed payloads are left alone', () => {
+  const cases = [
+    [CHARS, [...ld(1, uv(1, 1203)), ...charInfo()]],
+    [CHARS, [...charInfo(), 0x0b]],
+    [CHARS, [...charInfo(), ...ld(4, [1])]],
+    [CHARS, charInfo({ chars: [[CHAR, 400501], [CHAR, 400502]] })],
+    [CHARS, [...ld(2, [...uv(1, CHAR), ...ld(5, [1])]), ...uv(4, 1)]],
+    [ACCOUNT, [...ld(1, uv(1, 1203)), ...ld(2, account(ME))]],
+    [ACCOUNT, [...ld(2, account(ME)), ...ld(2, account(ME))]],
+    [ACCOUNT, ld(2, [...uv(1, ME), ...ld(7, [1])])],
+    [ACCOUNT, ld(2, [...account(ME), 0x0b])],
+  ];
+  for (const [method, payload] of cases) {
+    const rig = lobbyReady();
+    rig.lobby(method, payload);
+    assert.equal(rig.calls.length, 0, method + ' ' + payload.length);
+    assert.equal(rig.logs.length, 1, method + ' ' + JSON.stringify(rig.logs) + payload.length);
+  }
+});
+test('character without skin (or the reverse) skips character and avatar, still rewrites the title', () => {
+  for (const patch of [{ skinId: 0 }, { characterId: 0 }, { skinId: 1.5 }]) {
+    const rig = lobbyReady({ ...V1, ...patch });
+    rig.lobby(CHARS, charInfo());
+    rig.lobby(ACCOUNT, ld(2, account(ME)));
+    assert.deepEqual(rig.calls, [res(ACCOUNT, ld(2, [...uv(1, ME), ...str(2, 'me'), ...uv(11, 100), ...uv(13, 400101), ...uv(7, 600002)]))]);
+    assert.ok(rig.logs.some(l => l.includes('同時填')));
+  }
+});
+test('settings off, Naki traffic, or a NOTIFY/REQUEST of the method: no lobby rewrite', () => {
+  for (const settings of [{ ...V1, enabled: false }, { ...V1, testAccountAck: false }]) {
+    const rig = lobbyReady(settings);
+    rig.lobby(CHARS, charInfo());
+    assert.equal(rig.calls.length, 0);
+  }
+  const rig = lobbyReady();
+  rig.naki = true;
+  rig.lobby(CHARS, charInfo());
+  rig.naki = false;
+  rig.spec.onReceive({ method: CHARS, type: 1, bytes: envelope(1, 0, CHARS, charInfo()), payload: null, settings: V1, log() {}, replace() { throw new Error('no'); } });
+  assert.equal(rig.calls.length, 0);
+});
+test('older Naki without Phase 4 or the send guard: the plugin does nothing at all and says so once', () => {
+  for (const grant of [null, { capabilities: ['rewriteReceive'], sendGuard: GUARD }, { capabilities: PHASE4.capabilities },
+    { capabilities: PHASE4.capabilities, sendGuard: GUARD.slice(1) }]) {
+    const rig = setup(V1, { grant });
+    rig.login();
+    rig.lobby(CHARS, charInfo());
+    rig.lobby(ACCOUNT, ld(2, account(ME)));
+    const out = rig.play({ players: mkPlayers() });
+    unchanged(out);
+    assert.equal(rig.calls.length, 0);
+    assert.equal(rig.logs.filter(l => l.includes('2.20.0')).length, 1);
+  }
+  const rig = setup(V1, { grant: { ...PHASE4 } });
+  delete rig.win.__nakiPlugins.isReshapeForbidden;
+  rig.login(); rig.lobby(CHARS, charInfo());
+  assert.equal(rig.calls.length, 0);
+});
+test('kill-switch: a refused variable-length replace stops lobby rewrites for the page; in-game equal-length continues', () => {
+  let attempts = 0;
+  const rig = lobbyReady(V1, { replaceResult: (nb, b) => (attempts++, nb.length === b.length) });
+  rig.lobby(CHARS, charInfo());
+  assert.ok(rig.logs.some(l => l.includes('不再改大廳')));
+  rig.lobby(ACCOUNT, ld(2, account(ME)));
+  rig.lobby(CHARS, charInfo());
+  assert.equal(attempts, 1);
+  assert.equal(rig.win.__nakiLocalUnlockTouched, undefined);
+  rig.request();
+  const out = rig.auth(authPayload({ players: mkPlayers() }));
+  assert.deepEqual(out.bytes, expected({ players: withMe(mkPlayers(), { views: REWRITTEN.views }) }));
+  assert.equal(rig.calls.length, 1);
+  assert.equal(rig.win.__nakiLocalUnlockTouched, true);
+});
+
+// ---- v1：送出守衛 ----
+test('guarded requests pass untouched before any rewrite, and throw after one (lobby or in-game)', () => {
+  let rig = lobbyReady();
+  for (const m of GUARD) assert.equal(rig.send(m), undefined);
+  rig.lobby(CHARS, charInfo());
+  for (const m of GUARD) assert.throws(() => rig.send(m), /拒送/);
+  assert.equal(rig.send('.lq.Lobby.loginBeat'), undefined);
+  rig = setup({ ...SETTINGS, titleId: 0 });
+  rig.play({ players: mkPlayers() });
+  assert.throws(() => rig.send(SKIN), /拒送/);
+});
+test('the guard survives settings off, onDisable and a hot re-enable in the same page', () => {
+  const win = {};
+  let rig = setup(V1, { win });
+  rig.login(); rig.lobby(CHARS, charInfo());
+  rig.spec.onDisable({ log() {} });
+  assert.throws(() => rig.send(SKIN), /拒送/);
+  rig = setup({ ...V1, enabled: false }, { win });
+  assert.throws(() => rig.send(SKIN), /拒送/);
+  assert.equal(setup(V1).send(SKIN), undefined);
+});
+
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
 const html = fs.readFileSync(path.join(dir, 'settings.html'), 'utf8');
 const pluginSource = fs.readFileSync(path.join(dir, 'plugin.js'), 'utf8');
@@ -300,13 +469,16 @@ const plain = s => s.replace(/<[^>]+>/g, '').replace(/\*\*/g, '');
 
 test('manifest: minimal capability and methods, CC0, empty defaults, settings page declared', () => {
   assert.equal(manifest.id, 'naki-plugin-ex-local-unlock');
-  assert.deepEqual(manifest.capabilities, ['rewriteReceive']);
+  assert.equal(manifest.version, '1.0.0');
+  assert.deepEqual(manifest.capabilities, ['rewriteReceive', 'reshapeReceive']);
   assert.deepEqual(manifest.methods, ['.lq.Lobby.login', '.lq.Lobby.oauth2Login', '.lq.Lobby.emailLogin',
-    '.lq.FastTest.authGame', '.lq.NotifyAnotherLogin', '.lq.NotifyAccountLogout']);
+    '.lq.FastTest.authGame', '.lq.NotifyAnotherLogin', '.lq.NotifyAccountLogout', CHARS, ACCOUNT, ...GUARD]);
+  assert.deepEqual(manifest.sendGuard, GUARD);
   assert.equal(manifest.license, 'CC0-1.0');
   assert.equal(manifest.settingsUI, 'settings.html');
   assert.deepEqual(Object.entries(manifest.settings).map(([k, v]) => [k, v.type, v.default]),
-    [['enabled', 'boolean', false], ['testAccountAck', 'boolean', false], ['titleId', 'number', 0], ['views', 'string', '']]);
+    [['enabled', 'boolean', false], ['testAccountAck', 'boolean', false], ['titleId', 'number', 0], ['views', 'string', ''],
+      ['characterId', 'number', 0], ['skinId', 'number', 0]]);
 });
 test('plugin.js sends nothing, stores nothing and hard-codes no id', () => {
   assert.doesNotMatch(pluginSource, /rewriteSend|injectSend|sendRequest|sendRaw|__nakiWebSocket|respondLocally|localStorage|sessionStorage|indexedDB|fetch\(|XMLHttpRequest|WebSocket/);
@@ -316,8 +488,7 @@ test('settings page: only window.naki get/set on schema keys, no network or exte
   const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
   const members = [...script.matchAll(/window\.naki\.(\w+)/g)].map(m => m[1]);
   assert.ok(members.length > 0 && members.every(m => m === 'get' || m === 'set'), members.join());
-  const setKeys = [...script.matchAll(/(?:save|window\.naki\.set)\(\s*'([^']+)'/g)].map(m => m[1]);
-  for (const key of setKeys) assert.ok(manifest.settings[key], 'key not in schema: ' + key);
+  const setKeys = [...script.matchAll(/save\(\s*'([^']+)'/g), ...script.matchAll(/\['\w+', '(\w+Id)'\]/g)].map(m => m[1]);
   assert.deepEqual([...new Set(setKeys)].sort(), Object.keys(manifest.settings).sort());
   assert.equal([...script.matchAll(/window\.naki\.set\(\s*(?!')/g)].length, 1);
   assert.doesNotMatch(html, /localStorage|sessionStorage|indexedDB|fetch\(|XMLHttpRequest|WebSocket|sendBeacon|import\(|@import|https?:|<link|<iframe|<img[^>]*src|<script[^>]*src|url\(/i);
@@ -350,7 +521,12 @@ test('settings page: saving views and title validates before writing', async () 
   row.children[1].value = '30'; row.children[1].onchange();
   els.rows.children[1].children[0].value = '1'; els.rows.children[1].children[0].onchange();
   els.rows.children[1].children[0].value = '5'; els.rows.children[1].children[0].onchange();
+  assert.equal(els.characterId.value, '0');
+  els.characterId.value = '-1'; els.characterId.onchange();
+  els.characterId.value = '200005'; els.characterId.onchange();
+  els.skinId.value = '400501'; els.skinId.onchange();
   els.ack.checked = false; els.ack.onchange();
-  assert.deepEqual(written, [['titleId', 99], ['views', '1=30,2=20'], ['views', '1=30,5=20'], ['testAccountAck', false]]);
+  assert.deepEqual(written, [['titleId', 99], ['views', '1=30,2=20'], ['views', '1=30,5=20'],
+    ['characterId', 200005], ['skinId', 400501], ['testAccountAck', false]]);
   assert.equal(els.controls.disabled, true);
 });

@@ -10,11 +10,11 @@ Naki 官方範例插件 repo。每個插件一個 `plugins/<id>/` 目錄（含 `
 | `naki-plugin-ex-name-hider` | 暱稱隱藏 |
 | `naki-plugin-ex-tile-highlighter` | 牌面變色 |
 | `naki-plugin-ex-gist-logger` | 事件記錄 |
-| `naki-plugin-ex-local-unlock` | 本機解鎖（v0.1）：只改這台裝置上對局內自家的稱號與裝扮顯示，不送出任何請求。細節見 `plugins/naki-plugin-ex-local-unlock/README.md` |
+| `naki-plugin-ex-local-unlock` | 本機解鎖（1.0.0，需要 Naki 2.20.0 以上）：只改這台裝置上自家的外觀顯示（大廳主角色、皮膚、頭像、稱號；對局內稱號與裝扮），不送出任何請求，伺服器永遠不會收到使用未擁有物品的換裝請求。細節見 `plugins/naki-plugin-ex-local-unlock/README.md` |
 
 ## 自帶設定頁
 
-`naki-plugin-ex-tile-highlighter`（1.3.0）與 `naki-plugin-ex-local-unlock`（v0.1）在 manifest 宣告 `settingsUI`，插件頁會顯示它們自己的設定畫面。牌面變色的畫面有顏色色塊、淡化開關、即時預覽；本機解鎖的畫面要先勾選風險確認，才能操作其餘控制項。
+`naki-plugin-ex-tile-highlighter`（1.3.0）與 `naki-plugin-ex-local-unlock`（1.0.0）在 manifest 宣告 `settingsUI`，插件頁會顯示它們自己的設定畫面。牌面變色的畫面有顏色色塊、淡化開關、即時預覽；本機解鎖的畫面要先勾選風險確認，才能操作其餘控制項。
 
 - 需要 Naki 2.18.0 以上才看得到自帶設定頁。舊版 Naki 會忽略 `settingsUI`，改用 schema 自動渲染；停留在舊版 Naki 時，插件照常運作。
 - 升級路徑：若在 Naki 2.17.0 時已把此插件更新到 1.3.0，升級到 Naki 2.18.0 後該插件可能顯示無效（缺設定頁檔）。到插件頁按「檢查更新」重新取回即可恢復。

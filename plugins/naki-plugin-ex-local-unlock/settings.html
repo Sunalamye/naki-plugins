@@ -14,7 +14,9 @@
 <div class="row"><label for="ack">我確認只在測試帳號使用</label><input id="ack" type="checkbox"></div>
 <fieldset id="controls" disabled>
   <div class="row"><label for="enabled">啟用本機外觀覆寫</label><input id="enabled" type="checkbox"></div>
-  <div class="row"><label for="title">對局內稱號 id（0＝不覆寫）</label><input id="title" type="text" inputmode="numeric"></div>
+  <div class="row"><label for="title">稱號 id，對局內與大廳個人資料（0＝不覆寫）</label><input id="title" type="text" inputmode="numeric"></div>
+  <div class="row"><label for="characterId">大廳主角色 id（0＝不覆寫）</label><input id="characterId" type="text" inputmode="numeric"></div>
+  <div class="row"><label for="skinId">皮膚 id，也用作頭像（與角色同時填才生效）</label><input id="skinId" type="text" inputmode="numeric"></div>
   <div>對局內裝扮（只改該 slot 已存在的項目）</div>
   <div id="rows"></div>
   <button id="add" type="button">新增 slot</button>
@@ -60,17 +62,21 @@
   const gate = () => { $('controls').disabled = !$('ack').checked; };
   $('ack').onchange = () => { gate(); save('testAccountAck', $('ack').checked); };
   $('enabled').onchange = () => save('enabled', $('enabled').checked);
-  $('title').onchange = () => {
-    const text = $('title').value.trim();
-    if (!isId(text)) return status('稱號 id 必須是 0 到 ' + MAX + ' 的整數，未存');
-    save('titleId', Number(text));
-  };
+  [['title', 'titleId'], ['characterId', 'characterId'], ['skinId', 'skinId']].forEach(([id, key]) => {
+    $(id).onchange = () => {
+      const text = $(id).value.trim();
+      if (!isId(text)) return status('id 必須是 0 到 ' + MAX + ' 的整數，未存');
+      save(key, Number(text));
+    };
+  });
   $('add').onclick = () => { state.rows.push({ slot: '', item: '' }); renderRows(); };
   window.naki.get().then(v => {
     $('ack').checked = v.testAccountAck === true;
     gate();
     $('enabled').checked = v.enabled === true;
     $('title').value = String(v.titleId || 0);
+    $('characterId').value = String(v.characterId || 0);
+    $('skinId').value = String(v.skinId || 0);
     state.rows = parseViews(v.views);
     renderRows();
   }, e => status('讀取失敗：' + e));
