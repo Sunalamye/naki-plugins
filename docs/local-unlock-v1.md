@@ -124,3 +124,63 @@
   2. 只開聊天與表情面板、不點表情：確認不列出未擁有角色的表情；若列出且沒有可靠攔截，角色功能不得放行（表態 5）。
   3. 大廳與對局連線都記錄全部送出，含未解析與非 RPC 的；先錄未改寫基準，再錄改寫後，逐欄比對 §9 (b) 與待查欄位的值是否落在補入集合，不點擊會提交的操作。
   4. 先停用再重載頁面，確認遊戲不再顯示改寫資料（快取窗口，Astra 第 7 條，目前沒有證據）。保證只到重載為止：若遊戲從持久快取帶出改寫過的 id，宿主與插件都擋不住。
+
+## 11. 受限 live 觀察（2026-10-17）
+
+**取證，不是 I2 驗收。** 宿主 `/Applications/Naki.app` 2.20.0，插件 1.0.0（HEAD `4f55e7a`），測試帳號，L3 全程關。計畫見 `docs/plan/local-unlock-v1-live-plan.md`。證據在 `naki-plugins/.swfd/logs/unlock-v1-live/`（下稱 `live/`），不含帳號 id 與 token。
+
+### 主要發現：無點擊流程下插件完全沒有改寫
+
+1. **遊戲登入不送 `fetchCharacterInfo`、`fetchAccountInfo`。** 角色資料來自 `fetchInfo` 回應的 field 27 `character_info`（型別即 `ResCharacterInfo`）；自家頭像、稱號來自登入回應 `ResLogin.account`。插件只改前兩者，所以登入後 `reshape.attempted` 為 0、`page.touched` 為假、宿主污染為空，大廳畫面與基準相同（`live/R1-login-*`、`live/R1-login.png`）。
+2. **沒有污染，對局內也不改。** `authGame` 原始值與遊戲收到的值相同（`live/R3-game-records.json`），符合 §5.3「未污染不改」。
+3. **帳號開了隨機主角色。** `fetchInfo` field 31 `random_character.enabled=1`，池內兩個角色；每次登入（含 `forceReconnect` 重連）伺服器重抽主角色。兩角色帳號沒有固定「未使用」的 id，目標 200001／400101 在部分登入剛好是實際主角色（`live/B5-login2-recv.json`、`live/R3-game-records.json`）。
+4. **`fetchCharacterInfo`、`fetchAccountInfo` 推測要開宿舍或個人資料頁才送。** 開頁需要點擊遊戲畫面，Naki 禁止座標點擊，本輪無用戶在場，未操作。
+
+因此「改寫後」這一輪實際上沒有改寫過的 id 可外洩，S2–S6 的改寫輪只能證明「插件在場、未觸發時不影響流量」，不能回答 I2。
+
+### 步驟結論
+
+| 步 | 結論 | 證據 |
+|---|---|---|
+| S1 大廳回應 | **紅**：插件未觸發。原始與交付相同，`attempted=delivered=0`、`faults=0`。角色詳情、個人資料頁未開（須點擊） | `live/B1-login-*`、`live/R1-login-*` |
+| S2 聊天／好友 | **未觀察到**：面板未開（須點擊）。全程無 `sayChatMessage`、`sendClientMessage` | 全部 `*-records.json` |
+| S3 對局 | **綠（限未污染）**：`authGame` 未改；`broadcastInGame` 無嘗試；表情面板未開。宿主污染 0 個，等長改寫未發生 | `live/B3-game-*`、`live/B6-game-*`、`live/R3-game-*` |
+| S4 `logReport`／`clientMessage` | **基準觀察到 1 次 `logReport`**，在第一局對局中段到離房後 3 分鐘之間自動送出（未點選任何東西），無命中；欄位形狀當時未記。改寫輪同一時段沒有出現。`clientMessage` 全程無 | `live/B4-after-game-wait3m-*`、`live/R4-after-game-wait3m-*` |
+| S5 活動頁 | **未觀察到**：未開頁（須點擊）。全程無 `majClubActivity*`、mmo 候選 | 同上 |
+| S6 建房設定 | **未觀察到**：面板未開。`createRoom` 只有 Naki `room_quick_test` 自送（attempt 層 `naki=true`），形狀 `1:v, 2:ld18`，無命中 | `live/B6-game-*`、`live/R3-game-*` |
+| S7 停用重載 | **綠（無改寫可留）**：停用後插件離鏈、`enabledIds` 移除；重載後污染空、`__nakiLocalUnlock` 不存在；本機儲存命中鍵數與基準同為 0，IndexedDB 名稱相同 | `live/C1-*`、`live/C2-*`、`live/C3-storage.json`、`live/B-storage.json` |
+
+全部 11 段紀錄：守衛方法 attempt 與 wire 都是 0、無不透明或未解析送出、wire 命中目標集合 0 次（`live/*-summary.json`）。目標集合在基準期間本身就是帳號實際使用的值，遊戲送出仍沒有帶出。
+
+### (b) 21 列
+
+| 入口 | 觀察 |
+|---|---|
+| `logReport` | 基準 1 次，無命中；改寫輪未出現 |
+| `createRoom` | 只有 Naki 自送，非遊戲路徑；無命中 |
+| `sayChatMessage`、`sendClientMessage`、`clientMessage`、`majClubActivity*`（5 個）、`mmoActivityDebugSetTeamCandidate`、`createCustomizedContest`、`updateManagerCustomizedContest`、`gameMasterCommand`、`broadcastInGame`、`inputGameGMCommand` | 本操作未觀察到 |
+
+### §10 前置條件
+
+1. 大廳主角色、頭像、稱號：**未滿足**。插件在登入流程沒有接到可改的回應；稱號帳號為零，不測。
+2. 聊天與表情面板：**未滿足**，面板未開。
+3. 大廳與對局全部送出、先基準後改寫：**觀察器已就位**（登入前安裝，wire 層涵蓋大廳兩條 `/gateway` 與 `/game-gateway`），但改寫輪沒有改寫，比對無意義。
+4. 停用重載：**流程已走通**，因無改寫，快取窗口仍無證據。
+
+### 下一步需要裁決
+
+- 插件要改 `fetchInfo.character_info` 與 `ResLogin.account`，大廳改寫才會在登入時生效；這兩則是否改、是否進 `reshapeReceive` 與守衛前提，屬設計變更。
+- 要觸發 `fetchCharacterInfo`，需用戶手動開宿舍或個人資料頁；或另行授權 Naki 自送查詢，本輪不在授權副作用內，未做。
+- 隨機主角色帳號要先關隨機（屬換裝類送出，I2 禁送），或改用至少三個角色的測試帳號，才能穩定選出「未使用」的目標。
+
+### Deviations
+
+- 觀察器讀登入回應的 `account_id`（只存記憶體做自家判定）與 `account.title`、`avatar_id`。計畫寫登入類不解碼；改的理由是遊戲的大廳外觀就在登入回應裡，不讀就無從判斷顯示。輸出只有布林與物品 id。
+- 頁面自動快速登入，沒有登入畫面可停。觀察器改成重載後每 150ms 輪詢，在 gateway 建立前安裝（每次 `preConns=0`）。
+- 面板開關全部未做：計畫要求由用戶手動操作，本輪無用戶在場。
+- `/debug/ui` 只在 DEBUG build，改以主視窗工具列 `toolbar-plugins` 的 AXPress 開插件頁；設定頁欄位以 AX 聚焦後鍵入。
+- 第一局基準的 `logReport` 出現時，觀察器還沒記欄位形狀，之後補上；同時段的重跑沒再出現，形狀未取得。
+
+### 收尾
+
+插件目錄已刪，與開始前相同（`live/Z1-plugins-dir-after.txt`）；觀察器隨重載消失。plist 只多出本插件四個設定鍵（`characterId`、`enabled`、`skinId`、`testAccountAck`），依指示未 `defaults write`，清除與否交主線（`live/Z2-prefs-diff.txt`）。App 仍是 2.20.0（`live/Z3-status.json`）。
