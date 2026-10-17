@@ -93,6 +93,7 @@
 
 ## 未驗證
 
+- **I2 尚未驗收**：19 個方法的守衛保證不能替代完整驗收；(b) 21 列與待查 1098 列的外送可達性都還沒有證據（Astra 第三輪建議補記）。
 - live 全部（等 Naki 2.20.0 發布，由主線另派；只觀察不點擊，前置條件見設計 §10）：大廳畫面效果、補進的角色是否正常顯示、本地錯誤在遊戲的表現、伺服器無同 msgId 回應的外送證明、外送盤點與 v0 設計 §3.7 比對。
 - Swift 端 manifest 驗證未實際執行，只讀 `PluginManifest.validate` 的規則比對（`reshapeReceive` 與 `rewriteReceive` 同宣告、`sendGuard` 非空且全為 `.lq.Lobby.*` 並在 `methods`）。
 - 舊版 Naki（2.19.0）實際載入本 manifest 的行為：推測忽略 `sendGuard` 與未知 capability 後照常載入，插件判定不支援而不改寫；未在 App 內驗證。
