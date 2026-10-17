@@ -23,9 +23,9 @@
 11. **損壞的自家 Account 記 log**：初版把 `account_id` 解不出來的 Account 當成他人靜默略過，測試發現後改為「結構不符」記 log；真正的他人資料仍靜默。
 12. **Naki 的 `scripts/plugin-regression.cjs` 不載入本插件**：它只寫死測 tile-highlighter 與 name-hider。派工要求它仍全綠，已跑；本插件與 Naki runtime 的整合另由 `tests/local-unlock-naki.cjs` 覆蓋。
 
-## 驗收
+## 驗收（第一輪）
 
-證據在 Naki repo `.swfd/logs/unlock-v1/`（`plugin-regression.log`、`plugin-tests.log`、`mutation.log`、`mutate.cjs`）。
+證據在 `naki-plugins/.swfd/logs/unlock-v1/`（主 repo 絕對路徑 `/Users/suoie/Documents/tools/coremltools/naki-plugins/.swfd/logs/unlock-v1/`）：第一輪 `plugin-regression.log`、`plugin-tests.log`、`mutation.log`、`mutate.cjs`；第二輪 `r2-*`。第一輪曾放在 Naki repo `.swfd/logs/unlock-v1/`，已複製過來。
 
 | 項目 | 結果 |
 |---|---|
@@ -36,9 +36,39 @@
 | 跨 repo：遊戲收到變長改寫後的 `fetchCharacterInfo` | Naki `reshape` 計數 attempted 1、delivered 1、fallback 0、faults 0 |
 | 跨 repo：改寫後 `changeCharacterSkin` | 不外送，遊戲收到 `Error.code = 6` 的本地回應；L3 開著時原因為 `hook_threw` |
 
+## 第二輪（回應 Astra 第一輪：1 擋 6 應修，全採納）
+
+逐條回應與證據：`docs/plan/local-unlock-v1-review-response.md`。
+
+### Deviations（第二輪）
+
+13. **對局內改寫加前提「宿主已污染」，不整個停用**：派工給的保守選項是「無法維持保證就停用對局內等長」。改為只在宿主 `guardState().tainted` 已含本插件全部 19 個守衛方法時才改 `authGame`，其他情況不改。這樣保證與大廳一致（停用、自動移除後由宿主接手），又不必刪掉 v0.1 功能。查不到或不全時 fail-closed。
+14. **依賴未記載的 `__nakiPlugins.guardState()`**：契約沒有它，也沒有插件主動污染的 API。宿主日後改動它時，對局內改寫會 fail-closed 停止，不會放寬。列入「待宿主」。
+15. **重複 slot 的 `ViewSlot` 仍允許**：Astra 第 3 條針對單值欄位。`views` 是 repeated message，同一 slot 出現多個 `ViewSlot` 時沿用 v0.1（全部等長才改）；單一 `ViewSlot` 內 `slot`、`item_id` 重複則整則不改。
+16. **缺 `account_id` 的 Account 改為記 log**：第一輪把它當他人靜默略過；現在要求 `account_id` 恰一筆，否則按結構不符記 log。真正的他人資料仍靜默。
+17. **`.gitignore` 是新檔**：repo 原本沒有 `.gitignore`，新增只含 `.swfd/` 一行。master 的工作樹在合併前仍會顯示未追蹤的 `.swfd/`。
+18. **盤點的「證明不可能」只到請求欄位層級**：(c) 類以「id 來源回應本插件不改」或「欄位不是 id」為理由，沒有逐一追遊戲客戶端程式碼；未能證明的一律放 (b)。
+
+### 待宿主（主線另開 Naki 小包）
+
+1. **擴充 `GUARDABLE_METHODS`**（回應型別 field 1 皆已確認是 Error，`liqi.json`）：`.lq.Lobby.sayChatMessage`、`sendClientMessage`、`clientMessage`、`logReport`、`majClubActivityStartDay`、`majClubActivitySaveRoomData`、`majClubActivityUpgradeCharacterPower`、`majClubActivityUpgradeCharacterTag`、`majClubActivityFinishDay`、`mmoActivityDebugSetTeamCandidate`、`createRoom`、`createCustomizedContest`、`updateManagerCustomizedContest`。對應欄位見設計 §9 (b) 表。擴充後本插件的 `sendGuard` 與 `methods` 要同步加上。
+2. **對局連線的守衛**：`.lq.FastTest.broadcastInGame.content`、`inputGameGMCommand.json_data` 目前結構上不可守衛（守衛只在大廳連線，FastTest 一律繞過）。需要宿主決定是否支援，或以 live 證明表情面板只列真實擁有的表情。
+3. **插件主動污染 API**：例如 `__nakiPlugins.taint(id)` 或 `ctx.taint()`，讓插件在任何改寫（含對局內）前先把自己標為已污染，不必依賴「大廳改寫一次」。
+4. **把污染狀態查詢寫進契約**：本插件用 `guardState().tainted` 判斷宿主是否已接手；請宿主記載它或提供 `isTainted(id)` 之類的穩定 API。
+
+### 驗收（第二輪）
+
+| 項目 | 結果 | 證據 |
+|---|---|---|
+| `NAKI_ROOT=<Naki 8829e99> node --test tests/*.cjs` | 65／65 通過（local-unlock 43、local-unlock-naki 9、name-hider 7、settings-pages 6） | `r2-plugin-tests.log` |
+| 不設 `NAKI_ROOT` | 56 通過、9 略過 | 本機重跑 |
+| Naki `node scripts/plugin-regression.cjs <本 worktree>` | 38／38 | `r2-plugin-regression.log` |
+| 變異 35 個（第一輪 19 個對到新程式，加第二輪 16 個） | 全部被殺；初跑 1 個存活（`ViewSlot` 內 `item_id` 重複），補單測後被殺 | `r2-mutation.log`、`r2-mutate.cjs` |
+| 外送入口盤點 | 117 行命中，分 (a) 19、(b) 11 列、(c) 6 類 | `r2-inventory.cjs`、`r2-inventory.txt` |
+
 ## 未驗證
 
-- live 全部（等 Naki 2.20.0 發布，由主線另派）：大廳畫面效果、補進的角色是否正常顯示、本地錯誤在遊戲的表現、伺服器無同 msgId 回應的外送證明、外送盤點與 v0 設計 §3.7 比對。
+- live 全部（等 Naki 2.20.0 發布，由主線另派；只觀察不點擊，前置條件見設計 §10）：大廳畫面效果、補進的角色是否正常顯示、本地錯誤在遊戲的表現、伺服器無同 msgId 回應的外送證明、外送盤點與 v0 設計 §3.7 比對。
 - Swift 端 manifest 驗證未實際執行，只讀 `PluginManifest.validate` 的規則比對（`reshapeReceive` 與 `rewriteReceive` 同宣告、`sendGuard` 非空且全為 `.lq.Lobby.*` 並在 `methods`）。
 - 舊版 Naki（2.19.0）實際載入本 manifest 的行為：推測忽略 `sendGuard` 與未知 capability 後照常載入，插件判定不支援而不改寫；未在 App 內驗證。
 - `ResCharacterInfo`、`Account` 欄位號未用 live 封包核對。

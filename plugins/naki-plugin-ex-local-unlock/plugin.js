@@ -13,7 +13,9 @@
     'receiveEndingReward', 'receiveCharacterRewards', 'mmoActivitySetCharacter', 'mmoActivitySetTeamMember'
   ].map(function (m) { return '.lq.Lobby.' + m; });
   var MAX = 4294967295;
-  var selfId = 0, authReq = 0, alive = true, lobbyLocked = false, warned = false;
+  // 頁面層級的狀態掛在 window：熱停用、自動移除、重新執行源碼都不重置，頁面重載才清。
+  var page = window.__nakiLocalUnlock || (window.__nakiLocalUnlock = { touched: false, lobbyLocked: false });
+  var selfId = 0, alive = true, warned = false, authReqs = new Map();
 
   function readVarint(b, i, end) {
     var n = 0, mul = 1;
@@ -35,12 +37,12 @@
   function varintField(f, v) { return varint(f * 8).concat(varint(v)); }
   function bytesField(f, bytes) { return varint(f * 8 + 2).concat(varint(bytes.length), bytes); }
 
-  // visit(field, wire, from, to, value, start)：from/to 是值的位元組範圍（wire 2 為內容），start 是 tag 起點。結構損壞回 false。
+  // visit(field, wire, from, to, value, start)：from/to 是值的位元組範圍（wire 2 為內容），start 是 tag 起點。結構損壞或 field 0 回 false。
   function walk(b, from, to, visit) {
     var i = from;
     while (i < to) {
       var start = i, tag = readVarint(b, i, to);
-      if (!tag) return false;
+      if (!tag || tag[0] < 8) return false;
       var field = Math.floor(tag[0] / 8), wire = tag[0] & 7, end, v = null;
       i = tag[1];
       if (wire === 0) {
@@ -70,6 +72,16 @@
       else out.push({ from: s, to: e, value: v });
     });
     return ok && !bad ? out : null;
+  }
+  // 單值欄位：至多出現一次才回出現位置，否則 null。
+  function single(b, from, to, field, wire) {
+    var spans = collect(b, from, to, field, wire);
+    return spans && spans.length <= 1 ? spans : null;
+  }
+  // 結構完整且沒有 error（field 1）。
+  function clean(b, from, to) {
+    var errors = collect(b, from, to, 1, 2);
+    return !!errors && !errors.length;
   }
   // repeated uint32 的全部值，packed 與非 packed 都讀。
   function uints(b, field) {
@@ -102,7 +114,7 @@
   }
   function isOn(s) { return !!s && s.enabled === true && s.testAccountAck === true; }
   function isId(n) { return Number.isInteger(n) && n >= 1 && n <= MAX; }
-  function touch() { window.__nakiLocalUnlockTouched = true; }
+  function pairKey(ctx) { return ctx.socketId + ':' + ctx.msgId; }
 
   // Naki 有 Phase 4 變長 replace 且送出守衛認得本插件的 sendGuard，才做任何改寫。
   function supported(log) {
@@ -116,6 +128,13 @@
       log('這個 Naki 沒有變長改寫或送出守衛（需要 Naki 2.20.0 以上），本插件不做任何改寫');
     }
     return ok;
+  }
+  // 宿主已因本插件的大廳改寫而污染全部守衛方法：插件停用或被自動移除後，守衛仍由宿主接手。
+  function hostTainted() {
+    try {
+      var t = window.__nakiPlugins.guardState().tainted[ID] || [];
+      return GUARD.every(function (m) { return t.indexOf(m) !== -1; });
+    } catch (e) { return false; }
   }
 
   function parseViews(text) {
@@ -140,13 +159,13 @@
       ? { titleId: titleId, views: views, characterId: characterId, skinId: skinId } : null;
   }
 
-  // 玩家內的裝扮項目，依 slot 分組（省略 slot 欄位＝slot 0）。結構損壞回 null。
+  // 玩家內的裝扮項目，依 slot 分組（省略 slot 欄位＝slot 0）。結構損壞或單值欄位重複回 null。
   function viewItems(b, me) {
     var views = collect(b, me.from, me.to, 10, 2), items = {};
     if (!views) return null;
     for (var i = 0; i < views.length; i++) {
-      var slot = collect(b, views[i].from, views[i].to, 1, 0), item = collect(b, views[i].from, views[i].to, 2, 0);
-      if (!slot || !item || slot.length > 1) return null;
+      var slot = single(b, views[i].from, views[i].to, 1, 0), item = single(b, views[i].from, views[i].to, 2, 0);
+      if (!slot || !item) return null;
       var n = slot.length ? slot[0].value : 0;
       items[n] = (items[n] || []).concat(item);
     }
@@ -171,14 +190,16 @@
   function rewriteAuth(ctx, cfg, req) {
     var b = ctx.bytes, log = ctx.log, p = ctx.payload, edits = [];
     if (!selfId || req !== selfId) return log('自家身分未確認，不改寫');
+    if (!clean(b, p.from, p.to)) return log('authGame 帶錯誤或結構不符，不改寫');
+    if (!hostTainted()) return log('大廳尚未改寫，Naki 未接手守衛，對局內不改寫');
     var players = collect(b, p.from, p.to, 2, 2);
     if (!players) return log('authGame 結構不符，不改寫');
     var mine = players.filter(function (pl) { return only(collect(b, pl.from, pl.to, 1, 0)) === selfId; });
     if (mine.length !== 1) return log('找不到唯一的自家玩家，不改寫');
     var me = mine[0];
     if (cfg.titleId) {
-      var title = collect(b, me.from, me.to, 3, 0);
-      if (!title) return log('稱號欄位結構不符，不改寫');
+      var title = single(b, me.from, me.to, 3, 0);
+      if (!title) return log('稱號欄位結構不符或重複，不改寫');
       planEdits('稱號', title, cfg.titleId, edits, log);
     }
     var slots = Object.keys(cfg.views);
@@ -189,40 +210,44 @@
     }
     if (!edits.length) return;
     if (!ctx.replace(applyEdits(b, edits))) return log('replace 被拒，不改寫');
-    touch();
+    page.touched = true;
     log('已改寫 ' + edits.length + ' 項');
   }
 
   // ResCharacterInfo：主角色換成設定的角色並顯示設定的皮膚；角色或皮膚不在清單就補。回陣列＝新 payload，回字串＝不改的原因。
+  // 每個 Character 都要結構完整、charid 恰一筆、skin 至多一筆；任一不符整則不改。
   function rewriteCharacters(p, cfg) {
-    var errors = collect(p, 0, p.length, 1, 2), chars = collect(p, 0, p.length, 2, 2), skins = uints(p, 3);
-    if (!errors || errors.length || !chars || !skins || !collect(p, 0, p.length, 4, 0)) return '角色資料結構不符或帶錯誤，不改寫';
-    var own = chars.filter(function (c) { return only(collect(p, c.from, c.to, 1, 0)) === cfg.characterId; });
-    if (own.length > 1 || (own.length && !collect(p, own[0].from, own[0].to, 5, 0))) return '設定的角色重複或結構不符，不改寫';
+    var chars = collect(p, 0, p.length, 2, 2), skins = uints(p, 3);
+    if (!clean(p, 0, p.length) || !chars || !skins || !single(p, 0, p.length, 4, 0)) return '角色資料結構不符或帶錯誤，不改寫';
+    var own = [];
+    for (var i = 0; i < chars.length; i++) {
+      var c = chars[i], ids = collect(p, c.from, c.to, 1, 0);
+      if (!ids || ids.length !== 1 || !single(p, c.from, c.to, 5, 0)) return '角色清單有損壞或重複欄位，不改寫';
+      if (ids[0].value === cfg.characterId) own.push(c);
+    }
+    if (own.length > 1) return '設定的角色重複，不改寫';
     var mine = own.length ? rebuild(p.subarray(own[0].from, own[0].to), function (f) { if (f === 5) return []; })
       : varintField(1, cfg.characterId);
-    var out = mine && rebuild(p, function (f, s) {
+    mine = mine.concat(varintField(5, cfg.skinId));
+    var out = rebuild(p, function (f, s) {
       if (f === 4) return [];
-      if (f === 2 && own.length && s === own[0].from) return bytesField(2, mine.concat(varintField(5, cfg.skinId)));
+      if (f === 2 && own.length && s === own[0].from) return bytesField(2, mine);
     });
-    if (!out) return '角色資料結構不符，不改寫';
-    if (!own.length) out = out.concat(bytesField(2, mine.concat(varintField(5, cfg.skinId))));
+    if (!own.length) out = out.concat(bytesField(2, mine));
     if (skins.indexOf(cfg.skinId) === -1) out = out.concat(varintField(3, cfg.skinId));
     return out.concat(varintField(4, cfg.characterId));
   }
 
   // ResAccountInfo：只改自家 Account 的稱號與頭像。他人的資料回空字串，靜默略過。
   function rewriteAccount(p, cfg) {
-    var errors = collect(p, 0, p.length, 1, 2), accounts = collect(p, 0, p.length, 2, 2);
-    if (!errors || errors.length || !accounts || accounts.length !== 1) return '帳號資料結構不符或帶錯誤，不改寫';
-    var a = p.subarray(accounts[0].from, accounts[0].to);
-    var ids = collect(a, 0, a.length, 1, 0);
-    if (!ids || !collect(a, 0, a.length, 7, 0) || !collect(a, 0, a.length, 13, 0)) return '帳號欄位結構不符，不改寫';
-    if (only(ids) !== selfId) return '';
+    var accounts = collect(p, 0, p.length, 2, 2);
+    if (!clean(p, 0, p.length) || !accounts || accounts.length !== 1) return '帳號資料結構不符或帶錯誤，不改寫';
+    var a = p.subarray(accounts[0].from, accounts[0].to), ids = collect(a, 0, a.length, 1, 0);
+    if (!ids || ids.length !== 1 || !single(a, 0, a.length, 7, 0) || !single(a, 0, a.length, 13, 0)) return '帳號欄位結構不符或重複，不改寫';
+    if (ids[0].value !== selfId) return '';
     var title = cfg.titleId, skin = cfg.skinId;
-    var next = rebuild(a, function (f) { if ((f === 7 && title) || (f === 13 && skin)) return []; });
-    if (!next) return '帳號資料結構不符，不改寫';
-    next = next.concat(title ? varintField(7, title) : [], skin ? varintField(13, skin) : []);
+    var next = rebuild(a, function (f) { if ((f === 7 && title) || (f === 13 && skin)) return []; })
+      .concat(title ? varintField(7, title) : [], skin ? varintField(13, skin) : []);
     return rebuild(p, function (f) { if (f === 2) return bytesField(2, next); });
   }
 
@@ -237,10 +262,10 @@
     var body = bodies && bodies.length === 1 && rebuild(b.subarray(3), function (f) { if (f === 2) return bytesField(2, payload); });
     if (!body) return ctx.log('envelope 結構不符，不改寫');
     if (!ctx.replace(Uint8Array.from(Array.prototype.slice.call(b, 0, 3).concat(body)))) {
-      lobbyLocked = true;
+      page.lobbyLocked = true;
       return ctx.log('變長 replace 被拒，本頁面不再改大廳（重新載入頁面才恢復）');
     }
-    touch();
+    page.touched = true;
     ctx.log('已改寫 ' + ctx.method);
   }
 
@@ -249,30 +274,32 @@
     onSend: function (ctx) {
       // 改過任何一則顯示後，守衛方法一律拋錯：Naki 判 hook_threw 並本地拒送，即使 L3 開著也不原樣外送。
       if (GUARD.indexOf(ctx.method) !== -1) {
-        if (window.__nakiLocalUnlockTouched) throw new Error('已改過本機顯示，拒送 ' + ctx.method + '（重新載入頁面才恢復）');
+        if (page.touched) throw new Error('已改過本機顯示，拒送 ' + ctx.method + '（重新載入頁面才恢復）');
         return;
       }
       if (!alive || ctx.isNaki || !isOn(ctx.settings) || ctx.method !== AUTH || ctx.type !== 2 || !ctx.payload) return;
-      authReq = idOf(ctx, 1);
+      authReqs.set(pairKey(ctx), idOf(ctx, 1));
     },
     onReceive: function (ctx) {
       if (!alive || ctx.isNaki || !isOn(ctx.settings) || !supported(ctx.log)) return;
       var m = ctx.method;
-      if (LOGOUT.indexOf(m) !== -1) { selfId = authReq = 0; return; }
+      if (LOGOUT.indexOf(m) !== -1) { selfId = 0; authReqs.clear(); return; }
       if (LOGIN.indexOf(m) !== -1) {
-        authReq = 0;
-        selfId = idOf(ctx, 2);
+        authReqs.clear();
+        selfId = ctx.payload && clean(ctx.bytes, ctx.payload.from, ctx.payload.to) ? idOf(ctx, 2) : 0;
         return;
       }
       if (ctx.type !== 3) return;
-      var req = authReq;
-      if (m === AUTH) authReq = 0;
-      else if ((m !== CHARACTERS && m !== ACCOUNT) || !selfId || lobbyLocked) return;
+      var req = 0;
+      if (m === AUTH) {
+        req = authReqs.get(pairKey(ctx)) || 0;
+        authReqs.delete(pairKey(ctx));
+      } else if ((m !== CHARACTERS && m !== ACCOUNT) || !selfId || page.lobbyLocked) return;
       var cfg = parseSettings(ctx.settings, ctx.log);
       if (!cfg || !ctx.payload || typeof ctx.replace !== 'function') return;
       if (m === AUTH) rewriteAuth(ctx, cfg, req);
       else reshapeLobby(ctx, cfg);
     },
-    onDisable: function () { alive = false; selfId = authReq = 0; }
+    onDisable: function () { alive = false; selfId = 0; authReqs.clear(); }
   });
 })();

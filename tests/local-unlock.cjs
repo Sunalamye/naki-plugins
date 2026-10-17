@@ -51,14 +51,17 @@ const GUARD = ['changeCharacterSkin', 'changeMainCharacter', 'changeAvatar', 'us
 const PHASE4 = { capabilities: ['rewriteReceive', 'reshapeReceive'], sendGuard: GUARD };
 
 // grant：Naki 下發給本插件的授權；null 表示舊版 Naki 沒有 Phase 4（沒有 isReshapeForbidden、grant 無 sendGuard）。
-function setup(settings = SETTINGS, { canReplace = true, grant = PHASE4, replaceResult = () => true, win = {} } = {}) {
+// tainted：宿主 guardState 是否已把本插件的 19 個守衛方法列為污染（大廳改寫過）。
+function setup(settings = SETTINGS, { canReplace = true, grant = PHASE4, replaceResult = () => true, win = {}, tainted = true } = {}) {
   let spec;
   const logs = [];
-  win.__nakiPlugins = { register(s) { spec = s; }, ...(grant ? { isReshapeForbidden: () => false } : {}) };
+  win.__nakiPlugins = { register(s) { spec = s; }, guardState: () => ({ tainted: rig.tainted ? { [ID]: GUARD } : {} }),
+    ...(grant ? { isReshapeForbidden: () => false } : {}) };
   win.__nakiPluginGrants = grant ? { [ID]: grant } : {};
   vm.runInNewContext(source, { window: win, Number, Object, Math, Uint8Array, Array });
   const mk = (b, method, type) => {
-    const ctx = { direction: type === 2 ? 'send' : 'receive', type, method, bytes: b, payload: range(b), isNaki: rig.naki, settings, log: m => logs.push(m) };
+    const ctx = { direction: type === 2 ? 'send' : 'receive', type, method, bytes: b, payload: range(b), isNaki: rig.naki, settings, log: m => logs.push(m),
+      socketId: rig.socket, msgId: type === 1 ? null : b[1] | (b[2] << 8) };
     if (canReplace) ctx.replace = nb => {
       if (!replaceResult(nb, b)) return false;
       calls.push(Array.from(nb));
@@ -69,14 +72,14 @@ function setup(settings = SETTINGS, { canReplace = true, grant = PHASE4, replace
   };
   const calls = [];
   const rig = {
-    spec, logs, calls, win, naki: false,
+    spec, logs, calls, win, tainted, naki: false, socket: 1,
     login: (id = ME, method = '.lq.Lobby.login') => spec.onReceive(mk(envelope(3, 1, method, [...(id === null ? ld(1, uv(1, 2500)) : uv(2, id)), ...ld(3, uv(1, 999))]), method, 3)),
     notify: method => spec.onReceive(mk(envelope(1, 0, method, []), method, 1)),
-    request: (id = ME) => spec.onSend(mk(envelope(2, 7, '.lq.FastTest.authGame', [...uv(1, id), ...str(2, 'tok')]), '.lq.FastTest.authGame', 2)),
+    request: (id = ME, msgId = 7) => spec.onSend(mk(envelope(2, msgId, '.lq.FastTest.authGame', [...uv(1, id), ...str(2, 'tok')]), '.lq.FastTest.authGame', 2)),
     send: method => spec.onSend(mk(envelope(2, 9, method, uv(1, 1)), method, 2)),
     lobby: (method, payload) => spec.onReceive(mk(envelope(3, 8, method, payload), method, 3)),
-    auth(payload, edit) {
-      const b = envelope(3, 7, '.lq.FastTest.authGame', payload);
+    auth(payload, edit, msgId = 7) {
+      const b = envelope(3, msgId, '.lq.FastTest.authGame', payload);
       const before = Array.from(b);
       spec.onReceive(mk(edit ? edit(b) : b, '.lq.FastTest.authGame', 3));
       return { bytes: Array.from(b), before };
@@ -298,7 +301,7 @@ test('a replace refused by Naki is logged and nothing else is attempted', () => 
   rig.ready();
   const b = envelope(3, 7, '.lq.FastTest.authGame', authPayload({ players: mkPlayers() }));
   const before = Array.from(b);
-  rig.spec.onReceive({ method: '.lq.FastTest.authGame', type: 3, bytes: b, payload: range(b), settings: SETTINGS, replace: () => false, log: m => rig.logs.push(m) });
+  rig.spec.onReceive({ method: '.lq.FastTest.authGame', type: 3, bytes: b, payload: range(b), settings: SETTINGS, socketId: 1, msgId: 7, replace: () => false, log: m => rig.logs.push(m) });
   assert.deepEqual(Array.from(b), before);
   assert.ok(rig.logs.some(l => l.includes('replace 被拒')));
 });
@@ -355,9 +358,10 @@ test('fetchAccountInfo: title only or skin only touches only that field', () => 
 test('other accounts, unknown identity, or the account missing: no rewrite', () => {
   let rig = lobbyReady();
   rig.lobby(ACCOUNT, ld(2, account(222)));
-  rig.lobby(ACCOUNT, ld(2, account(222).slice(2)));
-  assert.equal(rig.calls.length, 0);
   assert.deepEqual(rig.logs, []);
+  rig.lobby(ACCOUNT, ld(2, account(ME).slice(2)));
+  assert.equal(rig.calls.length, 0);
+  assert.equal(rig.logs.length, 1);
   rig = setup(V1);
   rig.lobby(ACCOUNT, ld(2, account(ME)));
   rig.lobby(CHARS, charInfo());
@@ -431,12 +435,101 @@ test('kill-switch: a refused variable-length replace stops lobby rewrites for th
   rig.lobby(ACCOUNT, ld(2, account(ME)));
   rig.lobby(CHARS, charInfo());
   assert.equal(attempts, 1);
-  assert.equal(rig.win.__nakiLocalUnlockTouched, undefined);
+  assert.equal(rig.win.__nakiLocalUnlock.touched, false);
   rig.request();
   const out = rig.auth(authPayload({ players: mkPlayers() }));
   assert.deepEqual(out.bytes, expected({ players: withMe(mkPlayers(), { views: REWRITTEN.views }) }));
   assert.equal(rig.calls.length, 1);
-  assert.equal(rig.win.__nakiLocalUnlockTouched, true);
+  assert.equal(rig.win.__nakiLocalUnlock.touched, true);
+});
+
+// ---- v1 第二輪：提交前完整驗證、error 優先、配對、宿主污染、頁面鎖 ----
+test('duplicated single fields, damaged characters and field 0 leave the whole response alone', () => {
+  const cases = [
+    [CHARS, [...charInfo(), ...uv(4, 200002)]],
+    [CHARS, [...ld(2, [...uv(1, CHAR), ...uv(5, 400502), ...uv(5, 400503)]), ...uv(4, 200001)]],
+    [CHARS, [...ld(2, [...uv(1, 200001), ...uv(1, 200002)]), ...uv(4, 200001)]],
+    [CHARS, [...ld(2, uv(5, 400101)), ...uv(4, 200001)]],
+    [CHARS, [...ld(2, [...uv(1, 200001), ...ld(5, [1])]), ...uv(4, 200001)]],
+    [CHARS, [...charInfo(), 0x00, 0x01]],
+    [CHARS, [...ld(2, [...uv(1, 200001), 0x02, 0x01]), ...uv(4, 200001)]],
+    [ACCOUNT, ld(2, [...account(ME), ...uv(7, 5)])],
+    [ACCOUNT, ld(2, [...account(ME), ...uv(13, 400102)])],
+    [ACCOUNT, ld(2, [...account(ME), ...uv(1, ME)])],
+    [ACCOUNT, ld(2, [...account(ME), 0x00, 0x01])],
+    [ACCOUNT, [...ld(2, account(ME)), 0x07, 0x01]],
+  ];
+  for (const [method, payload] of cases) {
+    const rig = lobbyReady();
+    rig.lobby(method, payload);
+    assert.equal(rig.calls.length, 0, method + ' ' + payload.length);
+    assert.equal(rig.logs.length, 1, method + ' ' + JSON.stringify(rig.logs));
+  }
+  const rig = setup();
+  const out = rig.play({ players: withMe(mkPlayers(), { views: [[2, 1000], [2, 1001]] }) });
+  assert.equal(rig.calls.length, 1, 'repeated ViewSlot messages with the same slot are still allowed');
+  const dup = setup();
+  dup.ready();
+  unchanged(dup.auth(ld(2, [...uv(1, ME), ...uv(3, 300), ...uv(3, 301)])));
+  const dupItem = setup({ ...SETTINGS, titleId: 0 });
+  dupItem.ready();
+  unchanged(dupItem.auth(ld(2, [...uv(1, ME), ...uv(3, 300), ...ld(10, [...uv(1, 2), ...uv(2, 1000), ...uv(2, 1001)])])));
+  assert.equal(dupItem.calls.length, 0);
+  assert.ok(out);
+});
+test('error first: a login or authGame response that carries an error never teaches identity or gets rewritten', () => {
+  let rig = setup(V1);
+  rig.spec.onReceive({ method: '.lq.Lobby.login', type: 3, settings: V1, log() {}, socketId: 1, msgId: 1,
+    ...(b => ({ bytes: b, payload: range(b) }))(envelope(3, 1, '.lq.Lobby.login', [...ld(1, uv(1, 151)), ...uv(2, ME)])) });
+  rig.lobby(CHARS, charInfo());
+  rig.request();
+  unchanged(rig.auth(authPayload({ players: mkPlayers() })));
+  assert.equal(rig.calls.length, 0);
+  rig = setup();
+  rig.ready();
+  unchanged(rig.auth([...ld(1, uv(1, 1003)), ...authPayload({ players: mkPlayers() })]));
+  assert.ok(rig.logs.some(l => l.includes('帶錯誤')));
+  rig = setup(V1);
+  rig.login(); rig.lobby(CHARS, charInfo());
+  rig.spec.onReceive({ method: '.lq.Lobby.oauth2Login', type: 3, settings: V1, log() {}, socketId: 1, msgId: 2,
+    ...(b => ({ bytes: b, payload: range(b) }))(envelope(3, 2, '.lq.Lobby.oauth2Login', [...ld(1, uv(1, 151)), ...uv(2, ME)])) });
+  rig.lobby(CHARS, charInfo());
+  assert.equal(rig.calls.length, 1, 'an error login after a good one clears identity');
+});
+test('authGame identity pairs by (socketId, msgId): out-of-order responses and other sockets are not matched', () => {
+  const rig = setup();
+  rig.login();
+  rig.request(222, 7); rig.request(ME, 9);
+  unchanged(rig.auth(authPayload({ players: mkPlayers() }), null, 7));
+  assert.equal(rig.calls.length, 0);
+  assert.notDeepEqual(rig.auth(authPayload({ players: mkPlayers() }), null, 9).bytes, expected({ players: mkPlayers() }));
+  assert.equal(rig.calls.length, 1);
+  rig.request(ME, 11);
+  rig.socket = 2;
+  unchanged(rig.auth(authPayload({ players: mkPlayers() }), null, 11));
+  assert.equal(rig.calls.length, 1);
+});
+test('in-game rewrites only after Naki has tainted the plugin for every guarded method', () => {
+  let rig = setup(SETTINGS, { tainted: false });
+  unchanged(rig.play({ players: mkPlayers() }));
+  assert.ok(rig.logs.some(l => l.includes('對局內不改寫')));
+  assert.equal(rig.win.__nakiLocalUnlock.touched, false);
+  rig = setup();
+  rig.win.__nakiPlugins.guardState = () => ({ tainted: { [ID]: GUARD.slice(1) } });
+  unchanged(rig.play({ players: mkPlayers() }));
+  rig = setup();
+  delete rig.win.__nakiPlugins.guardState;
+  unchanged(rig.play({ players: mkPlayers() }));
+  assert.equal(rig.calls.length, 0);
+});
+test('the page lock survives re-running the plugin source in the same page', () => {
+  const win = {};
+  let rig = setup(V1, { win, replaceResult: () => false });
+  rig.login(); rig.lobby(CHARS, charInfo());
+  assert.equal(win.__nakiLocalUnlock.lobbyLocked, true);
+  rig = setup(V1, { win });
+  rig.login(); rig.lobby(CHARS, charInfo()); rig.lobby(ACCOUNT, ld(2, account(ME)));
+  assert.equal(rig.calls.length, 0);
 });
 
 // ---- v1：送出守衛 ----

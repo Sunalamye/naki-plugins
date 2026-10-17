@@ -10,7 +10,7 @@ Naki 官方範例插件 repo。每個插件一個 `plugins/<id>/` 目錄（含 `
 | `naki-plugin-ex-name-hider` | 暱稱隱藏 |
 | `naki-plugin-ex-tile-highlighter` | 牌面變色 |
 | `naki-plugin-ex-gist-logger` | 事件記錄 |
-| `naki-plugin-ex-local-unlock` | 本機解鎖（1.0.0，需要 Naki 2.20.0 以上）：只改這台裝置上自家的外觀顯示（大廳主角色、皮膚、頭像、稱號；對局內稱號與裝扮），不送出任何請求，伺服器永遠不會收到使用未擁有物品的換裝請求。細節見 `plugins/naki-plugin-ex-local-unlock/README.md` |
+| `naki-plugin-ex-local-unlock` | 本機解鎖（1.0.0，需要 Naki 2.20.0 以上）：只改這台裝置上自家的外觀顯示（大廳主角色、皮膚、頭像、稱號；對局內稱號與裝扮），不送出任何請求；改過顯示後 19 個換裝類請求在本機拒送，聊天與活動等入口未守衛。細節見 `plugins/naki-plugin-ex-local-unlock/README.md` |
 
 ## 自帶設定頁
 
